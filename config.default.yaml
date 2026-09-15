@@ -84,6 +84,7 @@ build_shape_options:
   simplify_gadm: true # When true, shape polygons are simplified else no
   simplify_tolerance: 0.01 # Default value is 0.01, higher the value more is the simplification of the GADM shapes
   minarea: 0.01 # Minimum area of polygons to be retained in GADM shapes after simplification, in square degrees. Polygons with area smaller than this value will be removed
+  # clip_bbox: [-125., 24., -66.5, 50.] # (optional) [xmin, ymin, xmax, ymax] in geo_crs; country, offshore and GADM shapes are clipped to it and empty parts dropped (e.g. contiguous US without Alaska/Hawaii)
   contended_flag: "set_by_country" # "set_by_country" assigns the contended areas to the countries according to the GADM database, "drop" drops these contended areas from the model
   worldpop_method: "standard" # "standard" pulls from web 1kmx1km raster, "api" pulls from API 100mx100m raster,
   # false (not "false") no pop addition to shape which is useful when generating only cutout

@@ -395,6 +395,44 @@ def countries(
     return ret_df
 
 
+def clip_to_bbox(shapes, bbox, name="shapes"):
+    """
+    Clip shapes to a bounding box and drop geometries that become empty.
+
+    Parameters
+    ----------
+    shapes : gpd.GeoSeries or gpd.GeoDataFrame
+        Shapes in geo_crs.
+    bbox : list[float] or None
+        [xmin, ymin, xmax, ymax] in geo_crs; None or empty disables clipping.
+    name : str
+        Label used in the log message.
+
+    Returns
+    -------
+    gpd.GeoSeries or gpd.GeoDataFrame
+        Clipped shapes; rows whose geometry is empty after clipping are dropped.
+        Useful e.g. to restrict a country to its contiguous part (US without
+        Alaska/Hawaii), which keeps antimeridian-crossing bounding boxes out of
+        the downstream exclusion rasters.
+    """
+    if not bbox:
+        return shapes
+    box_geom = shapely.geometry.box(*bbox)
+    geom = shapes.geometry if isinstance(shapes, gpd.GeoDataFrame) else shapes
+    clipped = geom.intersection(box_geom).make_valid()
+    keep = ~(clipped.is_empty | clipped.isna())
+    if isinstance(shapes, gpd.GeoDataFrame):
+        out = shapes.loc[keep].copy()
+        out["geometry"] = clipped[keep]
+    else:
+        out = clipped[keep]
+    logger.info(
+        f"clip_bbox: clipped {name} to {bbox}; dropped {int((~keep).sum())} of {len(keep)} geometries"
+    )
+    return out
+
+
 def country_cover(
     country_shapes: gpd.GeoSeries,
     eez_shapes: gpd.GeoSeries = None,
@@ -2033,6 +2071,7 @@ if __name__ == "__main__":
     tolerance = snakemake.params.build_shape_options["simplify_tolerance"]
     simplify_gadm = snakemake.params.build_shape_options["simplify_gadm"]
     minarea = snakemake.params.build_shape_options["minarea"]
+    clip_bbox = snakemake.params.build_shape_options.get("clip_bbox")
 
     country_shapes = countries(
         countries_list,
@@ -2042,6 +2081,7 @@ if __name__ == "__main__":
         out_logging,
         tolerance=tolerance,
     )
+    country_shapes = clip_to_bbox(country_shapes, clip_bbox, "country_shapes")
     country_shapes.to_file(out.country_shapes)
 
     offshore_shapes = eez(
@@ -2055,6 +2095,7 @@ if __name__ == "__main__":
         simplify_gadm=simplify_gadm,
     )
 
+    offshore_shapes = clip_to_bbox(offshore_shapes, clip_bbox, "offshore_shapes")
     offshore_shapes.reset_index().to_file(out.offshore_shapes)
 
     extended_country_shape = gpd.GeoDataFrame(
@@ -2079,6 +2120,7 @@ if __name__ == "__main__":
         minarea=minarea,
     )
 
+    gadm_shapes = clip_to_bbox(gadm_shapes, clip_bbox, "gadm_shapes")
     save_to_geojson(gadm_shapes, out.gadm_shapes)
 
     subregion_config = snakemake.params.subregion
