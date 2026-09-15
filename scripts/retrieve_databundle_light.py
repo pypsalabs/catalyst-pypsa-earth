@@ -80,6 +80,8 @@ according to the following rules:
 import datetime as dt
 import os
 import re
+import shutil
+import subprocess
 import time
 from zipfile import ZipFile
 
@@ -164,7 +166,15 @@ def download_and_unzip_zenodo(
     if hot_run:
         try:
             logger.info(f"Downloading resource '{resource}' from cloud '{url}'")
-            progress_retrieve(url, file_path, disable_progress=disable_progress)
+            if shutil.which("wget"):
+                # resumable: a partial tempfile.zip from an earlier attempt is continued
+                subprocess.run(
+                    ["wget", "-c", "-q", "--tries=30", "--waitretry=30",
+                     "--retry-connrefused", "-O", file_path, url],
+                    check=True,
+                )
+            else:
+                progress_retrieve(url, file_path, disable_progress=disable_progress)
             logger.info(f"Extracting resources")
             with ZipFile(file_path, "r") as zipObj:
                 # Extract all the contents of zip file in current directory
