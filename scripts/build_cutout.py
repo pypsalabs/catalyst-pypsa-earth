@@ -133,4 +133,6 @@ if __name__ == "__main__":
     logger.info(f"Preparing cutout with parameters {cutout_params}.")
     features = cutout_params.pop("features", None)
     cutout = atlite.Cutout(snakemake.output[0], **cutout_params)
-    cutout.prepare(features=features)
+    # monthly, strictly sequential CDS requests: small requests for the CDS
+    # request limits and bounded download memory
+    cutout.prepare(features=features, monthly_requests=True, concurrent_requests=False)
