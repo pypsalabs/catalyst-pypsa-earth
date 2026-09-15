@@ -105,12 +105,17 @@ if __name__ == "__main__":
     store_path_data = Path.joinpath(Path(BASE_DIR), "data", "osm")
     country_list = country_list_to_geofk(snakemake.params.countries)
 
+    # earth-osm parses the PBF with (cpu_count - 1) workers when mp is True;
+    # setting download_osm_data_nprocesses: 1 in the config keeps it single-process
+    nprocesses = snakemake.config.get("download_osm_data_nprocesses")
+    use_mp = nprocesses is None or int(nprocesses) > 1
+
     eo.save_osm_data(
         primary_name="power",
         region_list=country_list,
         feature_list=["substation", "line", "cable", "generator"],
         update=False,
-        mp=True,
+        mp=use_mp,
         data_dir=store_path_data,
         out_dir=store_path_resources,
         out_format=["csv", "geojson"],
