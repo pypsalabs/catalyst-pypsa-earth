@@ -1,3 +1,5 @@
+The PyPSA-Earth softfork for the catalyst project
+
 <!--
 SPDX-FileCopyrightText:  PyPSA-Earth and PyPSA-Eur Authors
 
