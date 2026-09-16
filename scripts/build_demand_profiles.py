@@ -381,12 +381,22 @@ def build_demand_profiles(
         else:
             shapes_cntry = shapes.loc[shapes.country == cntry]
             transfer = shapes_to_shapes(group, shapes_cntry.geometry).T.tocsr()
-            gdp_n = pd.Series(
-                transfer.dot(shapes_cntry["gdp"].fillna(1.0).values), index=group.index
-            )
             pop_n = pd.Series(
                 transfer.dot(shapes_cntry["pop"].fillna(1.0).values), index=group.index
             )
+            if "gdp" in shapes_cntry.columns:
+                gdp_n = pd.Series(
+                    transfer.dot(shapes_cntry["gdp"].fillna(1.0).values),
+                    index=group.index,
+                )
+            else:
+                # build_shape_options.gdp_method: false -> no gdp column;
+                # distribute by population only instead of failing
+                logger.warning(
+                    f"No 'gdp' column in the GADM shapes for {cntry}; "
+                    "distributing load by population only."
+                )
+                gdp_n = pop_n
 
             # relative factors 0.6 and 0.4 have been determined from a linear
             # regression on the country to EU continent load data
