@@ -2411,3 +2411,150 @@ def sanitize_locations(n: pypsa.Network) -> None:
             n.buses.country.ne("") & n.buses.country.notnull(),
             n.buses.location.map(n.buses.country),
         )
+
+
+def aggregateoneport_lean(
+    n,
+    busmap,
+    component,
+    carriers=None,
+    buses=None,
+    with_time=True,
+    custom_strategies=dict(),
+):
+    """
+    Memory-lean drop-in for ``pypsa.clustering.spatial.aggregateoneport``.
+
+    The PyPSA implementation expands every time-varying attribute to a dense
+    (snapshots x components) frame and then creates several full copies of it
+    (column selection, weighting, transposed groupby, concat). For networks
+    with per-bus renewable profiles over a full year this needs 5-6x the size
+    of the profile matrix. Here the static part is delegated to PyPSA
+    (``with_time=False``) and the linear aggregation strategies (sum, mean,
+    weighted_average, capacity_weighted_average) are evaluated as a single
+    sparse matrix product on the existing time series without any dense copy;
+    other strategies fall back to the PyPSA code path per attribute.
+    Results are numerically identical up to floating point summation order.
+    """
+    import numpy as np
+    import pandas as pd
+    from pypsa.clustering.spatial import (
+        DEFAULT_ONE_PORT_STRATEGIES,
+        aggregateoneport,
+        align_strategies,
+        flatten_multiindex,
+        normed_or_uniform,
+    )
+    from pypsa.descriptors import get_switchable_as_dense
+    from scipy import sparse
+
+    c = component
+    df_new, _ = aggregateoneport(
+        n,
+        busmap,
+        c,
+        carriers=carriers,
+        buses=buses,
+        with_time=False,
+        custom_strategies=custom_strategies,
+    )
+    if not with_time:
+        return df_new, {}
+
+    df = n.df(c)
+    if "carrier" in df.columns:
+        if carriers is None:
+            carriers = df.carrier.unique()
+        to_aggregate = df.carrier.isin(carriers)
+    else:
+        to_aggregate = pd.Series(True, df.index)
+    if buses is not None:
+        to_aggregate |= df.bus.isin(buses)
+
+    agg = df[to_aggregate]
+    agg = agg.assign(bus=agg.bus.map(busmap))
+    grouper = [agg.bus, agg.carrier] if "carrier" in agg.columns else agg.bus
+    groups = pd.Series(np.arange(len(agg)), index=agg.index).groupby(grouper)
+    codes = groups.ngroup()  # sorted group order, NaN keys dropped (-1)
+    valid = (codes >= 0).values
+    new_names = flatten_multiindex(groups.size().index).rename(c)
+    n_groups = len(new_names)
+    group_size = groups.transform("size").values.astype(float)
+
+    strategies = {**DEFAULT_ONE_PORT_STRATEGIES, **custom_strategies}
+    capacity = agg.columns.intersection({"p_nom", "e_nom"})
+    capacity_weights = (
+        agg[capacity[0]].groupby(grouper).transform(normed_or_uniform)
+        if len(capacity)
+        else None
+    )
+    weights = (
+        agg.weight.groupby(grouper).transform(normed_or_uniform)
+        if "weight" in agg.columns
+        else None
+    )
+    dynamic_strategies = align_strategies(strategies, n.pnl(c), c)
+
+    linear = {
+        "sum": lambda: np.ones(len(agg)),
+        "mean": lambda: 1.0 / group_size,
+        "weighted_average": lambda: weights.values,
+        "capacity_weighted_average": lambda: capacity_weights.values,
+    }
+
+    pnl = dict()
+    for attr, data in n.pnl(c).items():
+        if data.empty:
+            pnl[attr] = data
+            continue
+        strategy = dynamic_strategies[attr]
+        key = strategy if isinstance(strategy, str) else None
+
+        if key in linear:
+            w = linear[key]()
+            # rows of W follow the columns of the existing time series
+            in_data = agg.index.isin(data.columns)
+            row_var = data.columns.get_indexer(agg.index[in_data & valid])
+            W_var = sparse.csc_array(
+                (w[in_data & valid], (row_var, codes.values[in_data & valid])),
+                shape=(len(data.columns), n_groups),
+            )
+            res = data.values @ W_var  # one allocation of (snapshots x groups)
+            static_i = ~in_data & valid
+            if static_i.any():
+                W_static = sparse.csc_array(
+                    (w[static_i], (np.arange(static_i.sum()), codes.values[static_i])),
+                    shape=(static_i.sum(), n_groups),
+                )
+                res += df.loc[agg.index[static_i], attr].values @ W_static
+            aggregated = pd.DataFrame(res, index=data.index, columns=new_names)
+        else:
+            dense = get_switchable_as_dense(n, c, attr).loc[:, to_aggregate]
+            if strategy == "weighted_min":
+                dense = dense / weights
+                aggregated = dense.T.groupby(grouper).min().T
+            else:
+                aggregated = dense.T.groupby(grouper).agg(strategy).T
+            aggregated.columns = flatten_multiindex(aggregated.columns).rename(c)
+            del dense
+
+        non_cols = data.columns.intersection(df.index[~to_aggregate])
+        if len(non_cols):
+            aggregated = pd.concat([aggregated, data[non_cols]], axis=1, sort=False)
+        aggregated.columns.name = c
+
+        if attr in df_new:
+            # drop columns equal to the static value (tolerant to summation
+            # order); check the first snapshot before touching full columns
+            ref = df_new[attr].reindex(aggregated.columns).values
+            cand = np.isclose(aggregated.iloc[0].values, ref, rtol=1e-9, atol=1e-12)
+            if cand.any():
+                sub = aggregated.loc[:, cand].values
+                cand[cand] = np.isclose(
+                    sub, ref[cand][None, :], rtol=1e-9, atol=1e-12
+                ).all(axis=0)
+                if cand.any():
+                    aggregated = aggregated.loc[:, ~cand]
+        pnl[attr] = aggregated
+
+    return df_new, pnl

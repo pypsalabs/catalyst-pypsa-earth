@@ -86,6 +86,7 @@ import pandas as pd
 import pypsa
 import scipy as sp
 from _helpers import (
+    aggregateoneport_lean,
     add_year_suffix_to_carriers,
     configure_logging,
     create_logger,
@@ -310,7 +311,7 @@ def _aggregate_and_move_components(
     one_port_strategies = aggregation_strategies["one_ports"]
 
     carriers = set(n.generators.carrier) - set(exclude_carriers)
-    generators, generators_pnl = aggregateoneport(
+    generators, generators_pnl = aggregateoneport_lean(
         n,
         busmap,
         "Generator",
@@ -322,7 +323,7 @@ def _aggregate_and_move_components(
 
     for one_port in aggregate_one_ports:
         one_port_strategy = one_port_strategies.get(one_port, dict())
-        df, pnl = aggregateoneport(
+        df, pnl = aggregateoneport_lean(
             n,
             busmap,
             component=one_port,
