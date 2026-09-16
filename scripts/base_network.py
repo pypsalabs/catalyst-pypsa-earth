@@ -929,5 +929,12 @@ if __name__ == "__main__":
     )
 
     n.buses = pd.DataFrame(n.buses.drop(columns="geometry"))
+    # Branch WKT geometries are only used within this script (underwater
+    # fraction). netCDF stores strings fixed-width, so a single long line makes
+    # the exported variable len(lines) x max_len x 4 B (the US base network:
+    # 40k lines x 59k chars ~ 10 GB on every later import). The geometries stay
+    # in resources/base_network/*.geojson.
+    for c in (n.lines, n.links, n.transformers):
+        c.drop(columns="geometry", inplace=True, errors="ignore")
     n.meta = snakemake.config
     n.export_to_netcdf(snakemake.output[0])
