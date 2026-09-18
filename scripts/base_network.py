@@ -655,6 +655,8 @@ def _set_lines_s_nom_from_linetypes(n: "pypsa.Network") -> None:
     n : pypsa.Network
         Network whose ``lines`` component is updated in-place.
     """
+    if n.lines.empty:  # no line above threshold_voltage (see the under_construction guard below)
+        return
     # Info: n.line_types is a lineregister from pypsa/pandapowers
     n.lines["s_nom"] = (
         np.sqrt(3)
@@ -881,9 +883,12 @@ def base_network(
     n.import_components_from_dataframe(converters, "Link")
 
     # greenfield capacity expansion is represented with null capacity using num_parallel==0
-    n.lines["num_parallel"] = n.lines["num_parallel"].where(
-        ~n.lines["under_construction"], 0.0
-    )
+    # (guarded: a country without any line above the voltage threshold, e.g. Singapore whose
+    # transmission cables are not in OSM, imports an empty lines table without this column)
+    if "under_construction" in n.lines.columns:
+        n.lines["num_parallel"] = n.lines["num_parallel"].where(
+            ~n.lines["under_construction"], 0.0
+        )
     n.lines.drop(columns="under_construction", inplace=True, errors="ignore")
 
     _set_lines_s_nom_from_linetypes(n)
