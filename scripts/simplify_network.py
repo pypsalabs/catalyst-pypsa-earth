@@ -564,6 +564,65 @@ def simplify_links(
     return n, busmap
 
 
+def absorb_dc_buses(n):
+    """
+    Map every DC bus that survives ``simplify_links`` onto an AC bus, so that the
+    HVDC system is represented purely by links between AC buses.
+
+    OSM-derived HVDC data leaves DC buses that ``simplify_links`` cannot fold:
+    converter stations that also carry load or generators, cable stubs ending at a
+    DC bus without a converter, and isolated substations tagged DC. Each of them is
+    its own sub-network and therefore claims one cluster in ``cluster_network``
+    (North-West Europe: 18 of 50 clusters). A DC bus is mapped onto the AC bus of
+    its B2B converter if it has one, otherwise onto the nearest AC bus of the same
+    country. Links and lines whose two ends coincide afterwards (the converters)
+    are dropped; the DC links now connect AC buses directly.
+
+    Returns the modified network and the busmap (old bus -> new bus).
+    """
+    dc_buses = n.buses.index[n.buses.carrier == "DC"]
+    busmap = n.buses.index.to_series()
+    if dc_buses.empty:
+        return n, busmap
+
+    ac = n.buses[n.buses.carrier == "AC"]
+    conv = n.links[n.links.carrier == "B2B"]
+    target = {}
+    for d in dc_buses:
+        c = conv[(conv.bus0 == d) | (conv.bus1 == d)]
+        cand = [b for b in pd.concat([c.bus0, c.bus1]) if b in ac.index]
+        if cand:
+            target[d] = cand[0]
+            continue
+        same = ac[ac.country == n.buses.at[d, "country"]]
+        if same.empty:
+            same = ac
+        dist = (same.x - n.buses.at[d, "x"]) ** 2 + (same.y - n.buses.at[d, "y"]) ** 2
+        target[d] = dist.idxmin()
+    busmap = busmap.map(lambda b: target.get(b, b))
+
+    for c in n.one_port_components:
+        n.df(c)["bus"] = n.df(c)["bus"].map(busmap)
+    for c in n.branch_components:
+        df = n.df(c)
+        if df.empty:
+            continue
+        df["bus0"] = df["bus0"].map(busmap)
+        df["bus1"] = df["bus1"].map(busmap)
+    for c in ["Link", "Line", "Transformer"]:
+        df = n.df(c)
+        loops = df.index[df.bus0 == df.bus1]
+        if len(loops):
+            n.mremove(c, loops)
+    n.mremove("Bus", dc_buses)
+    n_conv = sum(target[d] in set(conv.bus0) | set(conv.bus1) for d in dc_buses)
+    logger.info(
+        f"Absorbed {len(dc_buses)} remaining DC buses into AC buses "
+        f"({n_conv} via their B2B converter, {len(dc_buses) - n_conv} to the nearest AC bus of the country)"
+    )
+    return n, busmap
+
+
 def remove_stubs(
     n,
     costs,
@@ -1094,6 +1153,10 @@ if __name__ == "__main__":
     )
 
     busmaps = [trafo_map, simplify_links_map]
+
+    # fork patch: no DC bus may survive into clustering (each would claim a cluster)
+    n, dc_map = absorb_dc_buses(n)
+    busmaps.append(dc_map)
 
     cluster_config = snakemake.params.clustering["simplify_network"]
     renewable_config = snakemake.params.renewable
