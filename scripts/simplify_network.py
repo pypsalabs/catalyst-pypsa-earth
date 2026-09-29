@@ -941,8 +941,11 @@ def merge_into_network(n, threshold, aggregation_strategies=dict()):
         n_buses_gdf.groupby(["sub_network"]).country.nunique() > 1
     )
 
+    # the backbone itself is never an island: with a threshold above its share
+    # of the national load its lines were removed and every bus left isolated
     gdf_islands = (
         n_buses_gdf.query("~is_multicnt_subntw")
+        .query("~is_backbone_sbntw")
         .query("carrier=='AC'")
         .query("sbntw_share_of_country_load < @threshold")
     )
