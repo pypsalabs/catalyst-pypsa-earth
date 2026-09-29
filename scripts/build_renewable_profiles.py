@@ -379,6 +379,44 @@ def filter_cutout_region(cutout, regions):
     return cutout
 
 
+def drop_nan_duplicate_coords(ds):
+    """
+    Drop the all-NaN member of near-duplicate coordinate pairs.
+
+    The prebuilt 2013 ERA5 cutouts for Asia and Oceania contain, east of
+    about 128 E, pairs of longitudes closer than a tenth of the grid step of
+    which one column is entirely NaN. Every region reaching into them gets NaN
+    profiles. Per group of near-identical coordinates, keep the one with the
+    fewest NaNs (probed on the first time step of the smallest time-dependent
+    variable) and round the coordinates so the grid is regular again.
+    """
+    for dim in ("x", "y"):
+        vals = ds[dim].values
+        step = np.median(np.abs(np.diff(vals)))
+        close = np.abs(np.diff(vals)) < step / 10
+        if not close.any():
+            continue
+        cand = [v for v in ds.data_vars if dim in ds[v].dims and "time" in ds[v].dims]
+        probe = ds[min(cand, key=lambda v: ds[v].size)].isel(time=0).load()
+        nan_frac = np.isnan(probe).mean([d for d in probe.dims if d != dim]).values
+        drop = []
+        for i in np.flatnonzero(close):  # pair (i, i + 1)
+            drop.append(i if nan_frac[i] > nan_frac[i + 1] else i + 1)
+        # contiguous slices between the dropped indices instead of fancy
+        # indexing: the netCDF backend would otherwise read element-wise
+        edges = [-1] + sorted(set(drop)) + [len(vals)]
+        pieces = [slice(a + 1, b) for a, b in zip(edges[:-1], edges[1:]) if b > a + 1]
+        ds = xr.concat(
+            [ds.isel({dim: s}) for s in pieces], dim=dim, data_vars="minimal"
+        )
+        ds = ds.assign_coords({dim: np.round(ds[dim].values, 4)})
+        logger.warning(
+            f"Cutout has {len(drop)} near-duplicate {dim} coordinates "
+            f"(e.g. {vals[drop[0]]:.5f}); dropped the all-NaN member of each pair."
+        )
+    return ds
+
+
 def rescale_hydro(plants, runoff, normalize_using_yearly, normalization_year):
     """
     Function used to rescale the inflows of the hydro capacities to match
@@ -579,6 +617,7 @@ if __name__ == "__main__":
         client = None
 
     cutout = atlite.Cutout(paths["cutout"])
+    cutout.data = drop_nan_duplicate_coords(cutout.data)
 
     check_cutout_match(cutout=cutout, regions=regions)
 
