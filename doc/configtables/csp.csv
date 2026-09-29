@@ -13,3 +13,4 @@ potential,--,"One of {'simple', 'conservative'}",Method to compute the maximal i
 clip_p_max_pu,p.u.,float,To avoid too small values in the renewables` per-unit availability time series values below this threshold are set to zero.
 extendable,bool,"{True, False}","True: In nodes where there is no csp generation, adds a zero-capacity csp generator so that csp is considered for capacity expansion. It is done in the ``add_electricity`` rule."
 csp_model,--,One of {'advanced' or 'simple'},Specifies the CSP model to be used. The advanced model attach stores and links to the csp buses while the simple has no stores and links.
+excluder_resolution,m,float,"Resolution of the land-use exclusion grid (default 100). A coarser grid (e.g. 1000) keeps the exclusion masks of very large bus regions, such as whole countries under ``alternative_clustering``, within memory."

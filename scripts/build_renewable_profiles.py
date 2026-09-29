@@ -746,7 +746,11 @@ if __name__ == "__main__":
     else:
         capacity_per_sqkm = config["capacity_per_sqkm"]
 
-        excluder = atlite.ExclusionContainer(crs=area_crs, res=100)
+        # [m]; coarser grids keep the rasterised exclusion masks of large
+        # regions (e.g. whole countries with alternative_clustering) in memory
+        excluder = atlite.ExclusionContainer(
+            crs=area_crs, res=config.get("excluder_resolution", 100)
+        )
 
         if check_flag(config, "natura"):
             excluder.add_raster(paths.natura, nodata=0, allow_no_overlap=True)

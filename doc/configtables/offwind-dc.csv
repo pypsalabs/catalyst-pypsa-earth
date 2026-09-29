@@ -13,3 +13,4 @@ min_shore_distance,m,float,Minimum distance to the shore below which wind turbin
 potential,--,"One of {'simple', 'conservative'}",Method to compute the maximal installable potential for a node; confer :ref:`renewableprofiles`
 clip_p_max_pu,p.u.,float,To avoid too small values in the renewables` per-unit availability time series values below this threshold are set to zero.
 extendable,bool,"{True, False}","True: In nodes where there is no offwind-dc generation, adds a zero-capacity offwind-dc generator so that offwind-dc is considered for capacity expansion. It is done in the ``add_electricity`` rule."
+excluder_resolution,m,float,"Resolution of the land-use exclusion grid (default 100). A coarser grid (e.g. 1000) keeps the exclusion masks of very large bus regions, such as whole countries under ``alternative_clustering``, within memory."
