@@ -566,6 +566,10 @@ rule build_demand_profiles:
             get_load_paths_gegis("data", config),
             "data/demand/forecasts_on_historical_period.parquet",
         ),
+        fallback=branch(
+            config["load_options"].get("fallback_source") == "demcast",
+            "data/demand/forecasts_on_historical_period.parquet",
+        ),
         #gadm_shapes="resources/" + RDIR + "shapes/MAR2.geojson",
         #using this line instead of the following will test updated gadm shapes for MA.
         #To use: downlaod file from the google drive and place it in resources/" + RDIR + "shapes/

@@ -3,3 +3,4 @@ source,--,"{gegis, demcast}","Load dataset provider. ``gegis``: bundled GEGIS SS
 weather_year,--,"YYYY (past year)","Calendar year of the load time series. Must lie within the ``snapshots`` date range. Available years depend on ``source`` (see ``source`` row)."
 prediction_year,--,"YYYY (past or future)","Future demand scenario year (GDP and population); used only when ``source`` is ``gegis``. Selects the path segment under ``data/ssp2-2.6/<prediction_year>/``."
 scale,--,float or dict,"Multiplier for all load time series (e.g. ``2`` doubles demand), or per-country factors via a dict with optional ``DEFAULT`` key."
+fallback_source,--,"{false, demcast}","``demcast``: countries for which ``source`` has no load (all-zero or missing, e.g. GEGIS for HK, PR, LA, BT) take the DemandCast series of ``weather_year`` instead; needs ``data/demand/forecasts_on_historical_period.parquet``. ``false`` (default): no fallback."

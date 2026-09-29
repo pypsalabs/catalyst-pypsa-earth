@@ -299,6 +299,7 @@ def build_demand_profiles(
     start_date,
     end_date,
     out_path,
+    fallback_path=None,
 ):
     """
     Create csv file of electric demand time series.
@@ -322,6 +323,9 @@ def build_demand_profiles(
         The start_date is the first hour of the first day of the snapshots
     end_date: parameter
         The end_date is the last hour of the last day of the snapshots
+    fallback_path: str, optional
+        DemandCast parquet used for countries without load in the chosen source
+        (load_options.fallback_source: demcast)
 
     Returns
     -------
@@ -352,6 +356,21 @@ def build_demand_profiles(
 
     # filter load for analysed countries
     el_load = el_load.loc[el_load.region_code.isin(countries)]
+
+    if fallback_path:
+        # countries the chosen source has no (or only zero / NaN) load for
+        total = el_load.groupby("region_code")["Electricity demand"].sum(min_count=1)
+        missing = [c for c in countries if not total.get(c, 0) > 0]
+        if missing:
+            fallback = read_demcast_load(fallback_path, weather_year, missing)
+            found = sorted(fallback.region_code.unique())
+            logger.warning(
+                f"No {load_source} load for {', '.join(missing)}; using DemandCast "
+                f"({weather_year}) for {', '.join(found) or 'none of them'}."
+            )
+            el_load = pd.concat(
+                [el_load.loc[~el_load.region_code.isin(found)], fallback]
+            )
 
     if isinstance(scale, dict):
         logger.info(f"Using custom scaling factor for load data.")
@@ -472,4 +491,5 @@ if __name__ == "__main__":
         start_date,
         end_date,
         out_path,
+        fallback_path=snakemake.input.get("fallback"),
     )
