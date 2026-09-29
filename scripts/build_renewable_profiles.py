@@ -788,7 +788,12 @@ if __name__ == "__main__":
             buffer = config["max_shore_distance"]
             excluder.add_geometry(paths.country_shapes, buffer=buffer, invert=True)
 
-        kwargs = dict(nprocesses=nprocesses, disable_progressbar=noprogress)
+        # nprocesses=None computes in-process: with a one-worker pool an OOM kill
+        # of the worker leaves pool.map waiting forever instead of failing
+        kwargs = dict(
+            nprocesses=nprocesses if nprocesses > 1 else None,
+            disable_progressbar=noprogress,
+        )
         if noprogress:
             logger.info("Calculate landuse availabilities...")
             start = time.time()
