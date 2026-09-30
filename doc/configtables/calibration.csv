@@ -1,0 +1,17 @@
+Parameter,Unit,Values,Description
+enable,bool,"{true, false}","Calibrate the clustered network to per-country statistics of a reference year in ``prepare_network`` (``scripts/calibrate_network.py``). Every table below is optional; a missing key skips that step."
+brownfield_only,bool,"{true, false}","Freeze every generator at its calibrated ``p_nom`` and drop the extendable stores so the solve is a pure dispatch of the calibrated fleet, e.g. for a validation year; transmission follows the ``ll`` wildcard."
+efficiency_spread,--,float,"If > 0, every fuel-burning generator is split into ``tranches`` equal parts whose efficiencies are spread by ±this fraction around the fleet value, giving a staircase merit order per carrier."
+tranches,--,int,Number of efficiency tranches per generator (with ``efficiency_spread`` > 0).
+net_import_tolerance,--,float,"Half-width of the annual net-import band relative to the target (floor 1 TWh), see ``net_imports``."
+energy_bands,--,dict,"Fuel group → ``[lower, upper]`` factors on the observed annual generation of ``tables.generation`` (``null`` = unbounded); ``solve_network`` keeps the annual generation of the group's carriers per country within the band. Lower bounds are skipped for countries whose observed generation exceeds demand by more than 5 %."
+energy_band_penalty,currency/MWh,float or ``false``,"Price of generation outside an energy band (soft constraint through a slack variable); ``false`` makes the bands hard, which turns any shortfall elsewhere in the system into load shedding."
+tables,,,"Paths of the calibration tables (csv, ``country`` column with ISO 3166-1 alpha-2 codes; a row with country ``*`` is the default)."
+-- demand,file,path,"``country, demand_twh``: the load time series of each country are scaled to this annual demand."
+-- capacity,file,path,"``country, group, gw``: installed capacity per fuel group (``coal, gas, oil, nuclear, biomass, geothermal, wind, solar, hydro``; hydro = run-of-river plus reservoirs, no pumped storage). Existing generators of the group are scaled; a group with a target but no generator is added at the country's largest-load bus."
+-- generation,file,path,"``country, group, cf``: observed annual capacity factors; the wind and solar profiles of each country are scaled so that their capacity factor matches (loss and weather-year correction, factor within 0.6-1.4)."
+-- hydro,file,path,"``country, inflow_twh[, max_hours]``: annual hydro generation (reservoir inflow and run-of-river energy are scaled to it) and, optionally, the energy-to-power ratio of the country's reservoirs."
+-- fuel_prices,file,path,"``country, fuel, price``: fuel price [currency/MWh_th] for ``gas, coal, lignite, oil, uranium, biomass``; marginal costs are recomputed as VOM + (fuel + CO₂ price × intensity) / efficiency."
+-- co2_prices,file,path,"``country, price``: CO₂ price [currency/tCO2] entering the marginal cost of every emitting generator of the country. Not to be combined with ``Ep`` in ``{opts}``."
+-- envelope,file,path,"``country, carrier, p_min_pu, p_max_pu, efficiency``: static must-run floor, availability cap and fleet-average efficiency per carrier for generators without a time-series ``p_max_pu``."
+-- net_imports,file,path,"``country, net_imports_twh``: annual net imports; ``solve_network`` constrains each country with cross-border lines or links to a band of ± ``net_import_tolerance`` around it."

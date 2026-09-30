@@ -1,0 +1,18 @@
+calibration:
+  enable: false          # apply the tables below to the clustered network in prepare_network (scripts/calibrate_network.py)
+  brownfield_only: false # true: freeze every generator and drop the extendable stores -> pure dispatch of the calibrated fleet (lines follow `ll`)
+  efficiency_spread: 0.  # > 0: split every fuel-burning generator into `tranches` parts with efficiencies x(1-spread)..x(1+spread)
+  tranches: 3
+  net_import_tolerance: 0.25 # half-width of the annual net-import band, relative to the target (floor 1 TWh)
+  energy_bands: {}       # fuel group -> [lower, upper] factor on the observed annual generation (tables.generation), e.g.
+                         # {coal: [0.85, 1.15], gas: [null, 1.15]}: solve-time constraints on the group's annual generation
+  energy_band_penalty: 200 # [currency/MWh] outside the band (soft constraint); false or 0 for hard bands
+  tables:                # csv files with a `country` column; leave a key out to skip that step
+    demand: ""           # country, demand_twh: annual load per country
+    capacity: ""         # country, group, gw: installed capacity per fuel group (coal, gas, oil, nuclear, biomass, geothermal, wind, solar, hydro)
+    hydro: ""            # country, inflow_twh[, max_hours]: annual hydro generation and reservoir energy-to-power ratio
+    generation: ""       # country, group, cf: observed capacity factors; wind and solar profiles are scaled to match per country
+    fuel_prices: ""      # country, fuel, price [currency/MWh_th] for gas, coal, lignite, oil, uranium, biomass
+    co2_prices: ""       # country, price [currency/tCO2]
+    envelope: ""         # country, carrier, p_min_pu, p_max_pu, efficiency: must-run floor, availability cap and fleet efficiency
+    net_imports: ""      # country, net_imports_twh: annual net imports, enforced as a band in solve_network

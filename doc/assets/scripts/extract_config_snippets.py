@@ -112,6 +112,7 @@ def main():
         "storage_techs": ["storage_techs"],
         "costs": ["costs"],
         "co2": ["co2"],
+        "calibration": ["calibration"],
         "monte_carlo": ["monte_carlo"],
         "solving_solver": ["solving", "solver"],
         "solving_options": {

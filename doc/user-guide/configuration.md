@@ -456,6 +456,16 @@ Carbon dioxide policy settings: emission caps and carbon prices (via `Co2L`/`Ep`
 
 {{ read_csv('configtables/co2.csv') }}
 
+### calibration
+
+Calibrates the clustered network to per-country statistics of a reference year (annual demand, installed capacity per fuel, hydro generation, fuel and CO₂ prices, must-run and availability envelopes) and can freeze all capacities for a pure dispatch run, e.g. to validate a historical year.
+
+```yaml
+--8<-- "configtables/snippets/calibration.yaml"
+```
+
+{{ read_csv('configtables/calibration.csv') }}
+
 ### monte_carlo
 
 Specifies the options for Monte Carlo sampling.

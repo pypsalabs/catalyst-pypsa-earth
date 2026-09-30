@@ -347,6 +347,19 @@ if __name__ == "__main__":
     costs = pd.read_csv(snakemake.input.tech_costs, index_col=0)
     s_max_pu = snakemake.params.lines["s_max_pu"]
 
+    calibration = snakemake.params.get("calibration", {}) or {}
+    if calibration.get("enable", False):
+        from calibrate_network import calibrate
+
+        if any("Ep" in o for o in opts) and "co2_prices" in calibration.get("tables", {}):
+            raise ValueError("calibration.tables.co2_prices and the Ep option both price CO2")
+        tables = {
+            k[len("calibration_") :]: v
+            for k, v in snakemake.input.items()
+            if k.startswith("calibration_")
+        }
+        calibration_targets = calibrate(n, costs, calibration, tables)
+
     set_line_s_max_pu(n, s_max_pu)
 
     for o in opts:
@@ -440,4 +453,6 @@ if __name__ == "__main__":
     sanitize_locations(n)
 
     n.meta = dict(snakemake.config, **dict(wildcards=dict(snakemake.wildcards)))
+    if calibration.get("enable", False):
+        n.meta["calibration"] = dict(calibration, **calibration_targets)
     n.export_to_netcdf(snakemake.output[0])

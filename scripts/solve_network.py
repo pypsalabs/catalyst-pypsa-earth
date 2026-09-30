@@ -1105,6 +1105,23 @@ def extra_functionality(n, snapshots):
     add_battery_constraints(n)
     add_lossy_bidirectional_link_constraints(n)
 
+    calibration = (n.meta or {}).get("calibration", {})
+    if calibration.get("net_import_targets"):
+        from calibrate_network import add_net_import_constraints
+
+        add_net_import_constraints(
+            n,
+            snapshots,
+            calibration["net_import_targets"],
+            calibration.get("net_import_tolerance", 0.25),
+        )
+    if calibration.get("energy_bands"):
+        from calibrate_network import add_energy_band_constraints
+
+        add_energy_band_constraints(
+            n, snapshots, calibration["energy_bands"], calibration.get("energy_band_penalty")
+        )
+
     if snakemake.config["sector"]["chp"]:
         logger.info("setting CHP constraints")
         add_chp_constraints(n)

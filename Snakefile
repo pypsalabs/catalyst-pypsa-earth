@@ -951,11 +951,20 @@ rule prepare_network:
         s_max_pu=config["lines"]["s_max_pu"],
         electricity=config["electricity"],
         co2=config["co2"],
+        calibration=config.get("calibration", {}),
     input:
         "networks/" + RDIR + "elec_s{simpl}_{clusters}_ec.nc",
         **branch(
             config["co2"]["automatic_emission"]["enable"],
             {"emissions": "resources/" + RDIR + "co2_emissions_elec_and_heat.csv"},
+        ),
+        **branch(
+            config.get("calibration", {}).get("enable", False),
+            {
+                f"calibration_{name}": path
+                for name, path in config.get("calibration", {}).get("tables", {}).items()
+                if path
+            },
         ),
         tech_costs="resources/" + RDIR + f"costs_{config['costs']['year']}_elec.csv",
     output:
