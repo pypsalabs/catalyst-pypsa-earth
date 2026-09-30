@@ -658,6 +658,17 @@ def attach_wind_and_solar(
                 target_total = targets.sum()
                 gap_total = caps_final.sum() - caps_existing.sum()
 
+                # The statistics define the installed fleet: make them the floor of the
+                # expansion as documented for `p_nom_min` (a factor on the stats), instead
+                # of only the initial p_nom, which an extendable generator ignores.
+                caps_final *= float(estimate_cfg.get("p_nom_min", 1.0))
+                p_nom_max_factor = estimate_cfg.get("p_nom_max", False)
+                if p_nom_max_factor:
+                    p_nom_max = caps_final * float(p_nom_max_factor)
+                p_nom_max = pd.Series(p_nom_max, index=caps_final.index).where(
+                    lambda x: x >= caps_final, caps_final
+                )
+
                 logger.info(
                     f"{carrier}: existing from powerplants = {existing_total/1e3:.2f} GW, "
                     f"IRENA target = {target_total/1e3:.2f} GW, "
@@ -681,7 +692,7 @@ def attach_wind_and_solar(
                 bus=ds.indexes["bus"],
                 carrier=carrier,
                 p_nom=caps_final,
-                p_nom_min=caps_existing,
+                p_nom_min=caps_final,
                 p_nom_extendable=carrier in extendable_carriers["Generator"],
                 p_nom_max=p_nom_max,
                 p_max_pu=p_max_pu,
