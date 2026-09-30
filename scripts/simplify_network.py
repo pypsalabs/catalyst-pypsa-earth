@@ -122,6 +122,35 @@ def simplify_network_to_base_voltage(n, linetype, base_voltage):
     """
 
     logger.info(f"Mapping all network lines onto a single {int(base_voltage)}kV layer")
+
+    # a transformer between buses of two countries (border substations whose
+    # voltage levels fall on either side of the border) must not merge its
+    # low-voltage bus into the other country: everything attached to that bus
+    # (with alternative_clustering the whole national load) would change
+    # country. Keep such ties as short lines of the transformer's rating.
+    bus_country = n.buses.country
+    cross = n.transformers[
+        n.transformers.bus0.map(bus_country) != n.transformers.bus1.map(bus_country)
+    ]
+    if len(cross):
+        logger.info(
+            f"{len(cross)} transformers connect buses of different countries; "
+            "kept as lines instead of merging their buses"
+        )
+        n.madd(
+            "Line",
+            "trafo_" + cross.index,
+            bus0=cross.bus0.values,
+            bus1=cross.bus1.values,
+            s_nom=cross.s_nom.fillna(0.0).values,
+            length=1.0,
+            carrier="AC",
+            dc=False,
+            underwater_fraction=0.0,
+            s_max_pu=n.lines.s_max_pu.iloc[0] if len(n.lines) else 1.0,
+        )
+        n.mremove("Transformer", cross.index)
+
     n.buses["v_nom"] = base_voltage
     n.lines["type"] = linetype
     n.lines["v_nom"] = base_voltage
