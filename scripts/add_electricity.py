@@ -139,6 +139,10 @@ def load_powerplants(
         "ocgt": "OCGT",
         "ccgt": "CCGT",
         "bioenergy": "biomass",
+        # powerplantmatching >= 0.6 splits Bioenergy into these three fuel types
+        "solid biomass": "biomass",
+        "biogas": "biomass",
+        "waste": "biomass",
         "ccgt, thermal": "CCGT",
         "hard coal": "coal",
     }
