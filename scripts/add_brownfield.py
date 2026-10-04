@@ -5,6 +5,12 @@
 """
 Prepares brownfield data from previous planning horizon.
 
+The script serves the sector-coupled rule ``add_brownfield`` and the
+electricity-only rule ``add_brownfield_elec``. In the electricity-only
+workflow it runs for every planning horizon including the first one, where
+there is no previous network and only the build year of the new assets is
+set and retired power plants are removed.
+
 Relevant Settings
 -----------------
 
@@ -30,6 +36,7 @@ Relevant Settings
         threshold_capacity:
         default_heating_lifetime:
         conventional_carriers:
+        retire_existing:
 
     snapshots:
         start:
@@ -49,9 +56,17 @@ Inputs
 - ``resources/{SECDIR}/cops/cop_soil_total_elec_s{simpl}_{clusters}_{planning_horizons}.nc``: Ground/soil source heat pump COP time series aligned to the network snapshots
 - ``resources/{SECDIR}/cops/cop_air_total_elec_s{simpl}_{clusters}_{planning_horizons}.nc``: Air source heat pump COP time series aligned to the network snapshots
 
+Electricity-only (``add_brownfield_elec``):
+
+- ``networks/{RDIR}/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}.nc``: prepared network, the same for all planning horizons
+- ``results/{RDIR}/networks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}.nc``: network solved at the previous planning horizon (none for the first one)
+- ``resources/{RDIR}/costs_{planning_horizons}_elec.csv``: technology costs of the planning horizon, applied to the extendable assets
+- ``resources/{RDIR}/costs_{year}_elec.csv``: technology costs the network was built with (``costs: year``)
+
 Output
 ------
 - ``{RESDIR}/prenetworks-brownfield/elec_s{simpl}_{clusters}_l{ll}_{opts}_{sopts}_{planning_horizons}_{discountrate}_export.nc``: Brownfield prenetwork file
+- ``networks/{RDIR}/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}.nc``: Brownfield network of the electricity-only workflow
 
 Description
 -----------
@@ -65,8 +80,16 @@ import numpy as np
 import pandas as pd
 import pypsa
 import xarray as xr
-from _helpers import read_csv_nafix, sanitize_carriers, sanitize_locations
-from add_existing_baseyear import add_build_year_to_new_assets
+from _helpers import (
+    configure_logging,
+    read_csv_nafix,
+    sanitize_carriers,
+    sanitize_locations,
+)
+from add_existing_baseyear import (
+    add_build_year_to_new_assets,
+    rename_clashing_vintages,
+)
 
 # from pypsa.clustering.spatial import normed_or_uniform
 
@@ -74,7 +97,152 @@ logger = logging.getLogger(__name__)
 idx = pd.IndexSlice
 
 
-def add_brownfield(n: pypsa.Network, n_p: pypsa.Network, year: int) -> None:
+def remove_retired_assets(n: pypsa.Network, year: int) -> None:
+    """
+    Removes existing assets which have reached the end of their lifetime.
+
+    Only assets with a fixed capacity are considered, i.e. the existing power
+    plants with a build year and a lifetime from the power plant data. Assets
+    built by the optimisation in previous planning horizons are retired in
+    ``add_brownfield``.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network prepared for the planning horizon.
+    year : int
+        The planning horizon year.
+
+    Returns
+    -------
+    None
+    """
+    for c in n.iterate_components(["Link", "Generator", "Store", "StorageUnit"]):
+        attr = "e" if c.name == "Store" else "p"
+        retired = c.df.index[
+            ~c.df[f"{attr}_nom_extendable"]
+            & (c.df.build_year != 0)
+            & (c.df.build_year + c.df.lifetime < year)
+        ]
+        if retired.empty:
+            continue
+        capacity = c.df.loc[retired].groupby("carrier")[f"{attr}_nom"].sum()
+        logger.info(
+            f"Retiring {len(retired)} {c.name} assets before {year}, "
+            f"capacity by carrier:\n{capacity.round(1).to_string()}"
+        )
+        n.mremove(c.name, retired)
+
+
+def update_capital_costs(
+    n: pypsa.Network,
+    costs: pd.DataFrame,
+    costs_base: pd.DataFrame,
+    storage_techs: dict,
+) -> None:
+    """
+    Moves the capital costs of the extendable assets to the planning horizon.
+
+    The electricity network is built once with the costs of ``costs: year``.
+    For every technology the difference between the cost tables of the planning
+    horizon and of that year is added to the capital cost of the extendable
+    generators, storage units, stores and storage links, so that adders from
+    earlier steps (e.g. grid connection costs) are kept. Existing assets and
+    transmission are not touched; the distance-dependent connection cost of
+    offshore wind stays at ``costs: year``.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network prepared for the planning horizon.
+    costs : pd.DataFrame
+        Cost table of the planning horizon (``costs_{planning_horizons}_elec.csv``).
+    costs_base : pd.DataFrame
+        Cost table the network was built with.
+    storage_techs : dict
+        The ``storage_techs`` config block: storage carrier -> cost table entries.
+
+    Returns
+    -------
+    None
+    """
+
+    def link_cost(table, entry, discharge=False):
+        if entry not in table.index:
+            return np.nan
+        cost = table.at[entry, "capital_cost"]
+        if discharge and entry == "fuel cell":
+            # NB: fuel cell investment cost is per MWel
+            cost *= table.at[entry, "efficiency"]
+        return cost
+
+    def difference(entries, **kwargs):
+        return sum(
+            link_cost(costs, e, **kwargs) - link_cost(costs_base, e, **kwargs)
+            for e in entries
+        )
+
+    changes = {}
+
+    def shift(c, assets, delta, label):
+        if assets.empty or np.isnan(delta) or delta == 0.0:
+            return
+        df = n.df(c)
+        df.loc[assets, "capital_cost"] = (df.loc[assets, "capital_cost"] + delta).clip(
+            lower=0.0
+        )
+        changes[label] = delta
+
+    gens = n.generators[n.generators.p_nom_extendable]
+    for carrier in gens.carrier.unique():
+        entries = (
+            ["offwind", carrier + "-station"]
+            if carrier.startswith("offwind")
+            else [carrier]
+        )
+        shift("Generator", gens.index[gens.carrier == carrier], difference(entries), carrier)
+
+    sus = n.storage_units[n.storage_units.p_nom_extendable]
+    for carrier in sus.carrier.unique():
+        shift("StorageUnit", sus.index[sus.carrier == carrier], difference([carrier]), carrier)
+
+    stores = n.stores[n.stores.e_nom_extendable]
+    links = n.links[n.links.p_nom_extendable]
+    for carrier, lookup in storage_techs.items():
+        shift(
+            "Store",
+            stores.index[stores.carrier == carrier],
+            difference([lookup["store"]]),
+            f"{carrier} store",
+        )
+        charge = lookup.get("bicharger", lookup.get("charger"))
+        charge_name = "electrolysis" if charge == "electrolysis" else "charger"
+        shift(
+            "Link",
+            links.index[links.carrier == f"{carrier} {charge_name}"],
+            difference([charge]),
+            f"{carrier} {charge_name}",
+        )
+        if "bicharger" not in lookup:
+            discharge = lookup["discharger"]
+            discharge_name = "fuel cell" if discharge == "fuel cell" else "discharger"
+            shift(
+                "Link",
+                links.index[links.carrier == f"{carrier} {discharge_name}"],
+                difference([discharge], discharge=True),
+                f"{carrier} {discharge_name}",
+            )
+
+    if changes:
+        logger.info(
+            "Capital cost of extendable assets moved to the planning horizon, change per unit:\n"
+            + pd.Series(changes).round(1).to_string()
+        )
+
+
+def add_brownfield(
+    n: pypsa.Network, n_p: pypsa.Network, year: int, sector_coupled: bool = True
+) -> None:
     """
     Adds brownfield assets from the previous planning horizon to the network.
 
@@ -86,12 +254,18 @@ def add_brownfield(n: pypsa.Network, n_p: pypsa.Network, year: int) -> None:
         The previous PyPSA network from which brownfield assets will be sourced.
     year : int
         The planning horizon year for which brownfield assets are being prepared.
+    sector_coupled : bool
+        Whether the networks are sector-coupled; the gas and hydrogen pipeline
+        handling is skipped otherwise.
 
     Returns
     -------
     None
     """
     logger.info(f"Preparing brownfield for the year {year}")
+
+    planning_horizons = snakemake.config["scenario"]["planning_horizons"]
+    year_p = planning_horizons[planning_horizons.index(year) - 1]
 
     # electric transmission grid set optimised capacities of previous as minimum
     n.lines.s_nom_min = n_p.lines.s_nom_opt
@@ -105,7 +279,7 @@ def add_brownfield(n: pypsa.Network, n_p: pypsa.Network, year: int) -> None:
         n.generators.loc[extendable_gens, "p_nom_min"] = 0.0
         n.generators.loc[extendable_gens, "p_nom"] = 0.0
 
-    for c in n_p.iterate_components(["Link", "Generator", "Store"]):
+    for c in n_p.iterate_components(["Link", "Generator", "Store", "StorageUnit"]):
         attr = "e" if c.name == "Store" else "p"
 
         # Remove generators, links and stores that track global values since they exist in n
@@ -114,8 +288,15 @@ def add_brownfield(n: pypsa.Network, n_p: pypsa.Network, year: int) -> None:
         # Remove assets whose build_year + lifetime < year
         n_p.mremove(c.name, c.df.index[c.df.build_year + c.df.lifetime < year])
 
-        # Remove assets that are not extendable since they already exist in n
-        n_p.mremove(c.name, c.df.index[~c.df[f"{attr}_nom_extendable"]])
+        # Remove existing assets, which are in n already: by name, and those without a
+        # build year in the input data, which are named after the planning horizon.
+        # Assets with a fixed capacity that remain were built in an earlier planning
+        # horizon and are kept.
+        n_p.mremove(c.name, c.df.index.intersection(getattr(n, c.list_name).index))
+        n_p.mremove(
+            c.name,
+            c.df.index[~c.df[f"{attr}_nom_extendable"] & (c.df.build_year == year_p)],
+        )
 
         # Remove assets if their optimized nominal capacity is lower than a threshold
         threshold = snakemake.params.threshold_capacity
@@ -130,9 +311,6 @@ def add_brownfield(n: pypsa.Network, n_p: pypsa.Network, year: int) -> None:
         c.df[f"{attr}_nom"] = c.df[f"{attr}_nom_opt"]
         c.df[f"{attr}_nom_extendable"] = False
 
-        # Remove assets if name already exist in the new network
-        n_p.mremove(c.name, c.df.index.intersection(getattr(n, c.list_name).index))
-
         n.import_components_from_dataframe(c.df, c.name)
 
         # Copy time-dependent parameters of the optimized assets from previous horizon to current
@@ -141,6 +319,9 @@ def add_brownfield(n: pypsa.Network, n_p: pypsa.Network, year: int) -> None:
         ) & n.component_attrs[c.name].status.str.contains("Input")
         for tattr in n.component_attrs[c.name].index[selection]:
             n.import_series_from_dataframe(c.pnl[tattr], c.name, tattr)
+
+        if not sector_coupled:
+            continue
 
         # deal with gas network
         pipe_carrier = ["gas pipeline"]
@@ -310,7 +491,9 @@ if __name__ == "__main__":
             discountrate=0.071,
         )
 
-    logger.info(f"Preparing brownfield from the file {snakemake.input.network_p}")
+    configure_logging(snakemake)
+
+    is_sector_coupled = "sopts" in snakemake.wildcards.keys()
 
     year = int(snakemake.wildcards.planning_horizons)
 
@@ -319,13 +502,31 @@ if __name__ == "__main__":
     # TODO
     # adjust_renewable_profiles(n, snakemake.input, snakemake.params, year)
 
+    if "costs_base" in snakemake.input.keys():
+        update_capital_costs(
+            n,
+            pd.read_csv(snakemake.input.costs, index_col=0),
+            pd.read_csv(snakemake.input.costs_base, index_col=0),
+            snakemake.params.storage_techs,
+        )
+
+    rename_clashing_vintages(n, snakemake.config["scenario"]["planning_horizons"])
+
     add_build_year_to_new_assets(n, year)
 
-    n_p = pypsa.Network(snakemake.input.network_p)
+    if snakemake.config["existing_capacities"].get("retire_existing", True):
+        remove_retired_assets(n, year)
 
-    add_brownfield(n, n_p, year)
+    # the first planning horizon of the electricity-only workflow has no previous network
+    network_p = snakemake.input.get("network_p")
+    if network_p:
+        logger.info(f"Preparing brownfield from the file {network_p}")
 
-    disable_grid_expansion_if_limit_hit(n)
+        n_p = pypsa.Network(network_p)
+
+        add_brownfield(n, n_p, year, sector_coupled=is_sector_coupled)
+
+        disable_grid_expansion_if_limit_hit(n)
 
     sanitize_carriers(n, snakemake.config)
     sanitize_locations(n)

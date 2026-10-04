@@ -1,3 +1,3 @@
 Parameter,Unit,Values,Description
 countries,--,"ISO 3166-1 alpha-2 codes, continent name, or custom region",Countries or regions included in the model.
-foresight,--,"{overnight, myopic}",Optimization foresight mode.
+foresight,--,"{overnight, myopic}","Optimization foresight mode. ``myopic`` solves the investment years of ``scenario: planning_horizons`` one after the other, each starting from the capacities built before; available for the sector-coupled model (``solve_sector_networks_myopic``) and the electricity-only model (``solve_all_networks_myopic``)."

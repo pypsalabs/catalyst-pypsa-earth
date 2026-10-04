@@ -49,7 +49,7 @@ def add_build_year_to_new_assets(n: pypsa.Network, baseyear: int):
     None
     """
     # Set build_year for assets with lifetimes and no build year to the baseyear
-    for c in n.iterate_components(["Link", "Generator", "Store"]):
+    for c in n.iterate_components(["Link", "Generator", "Store", "StorageUnit"]):
         assets = c.df.index[(c.df.lifetime != np.inf) & (c.df.build_year == 0)]
         c.df.loc[assets, "build_year"] = baseyear
 
@@ -59,6 +59,55 @@ def add_build_year_to_new_assets(n: pypsa.Network, baseyear: int):
         c.df.rename(index=rename, inplace=True)
 
         # rename time-dependent
+        selection = n.component_attrs[c.name].type.str.contains(
+            "series"
+        ) & n.component_attrs[c.name].status.str.contains("Input")
+        for attr in n.component_attrs[c.name].index[selection]:
+            c.pnl[attr] = c.pnl[attr].rename(columns=rename)
+
+
+def rename_clashing_vintages(n: pypsa.Network, planning_horizons: list):
+    """
+    Rename existing assets whose name ends with a planning horizon.
+
+    Existing power plants are named ``<bus> <carrier>-<grouping year>``, assets
+    built by the optimisation ``<bus> <carrier>-<planning horizon>``. If a
+    grouping year coincides with a planning horizon, both would get the same
+    name and the capacity built in that horizon would be lost in later ones.
+    Such existing assets are renamed to end with their build year instead.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+    planning_horizons : list
+        all investment years of the scenario
+
+    Returns
+    -------
+    None
+    """
+    suffixes = tuple(f"-{year}" for year in planning_horizons)
+    for c in n.iterate_components(["Link", "Generator", "Store", "StorageUnit"]):
+        clashing = c.df.index[
+            c.df.index.str.endswith(suffixes)
+            & (c.df.build_year != 0)
+            & (c.df.build_year.astype(int).astype(str) != c.df.index.str[-4:])
+        ]
+        if clashing.empty:
+            continue
+        rename = pd.Series(c.df.index, c.df.index)
+        rename[clashing] = clashing.str[:-4] + c.df.loc[clashing, "build_year"].astype(
+            int
+        ).astype(str)
+        if rename.duplicated().any():
+            raise ValueError(
+                f"Cannot give unique names to the existing {c.name} assets "
+                f"{list(rename[rename.duplicated(keep=False)].index)}"
+            )
+        logger.info(
+            f"Renaming {len(clashing)} existing {c.name} assets named after a planning horizon"
+        )
+        c.df.rename(index=rename, inplace=True)
         selection = n.component_attrs[c.name].type.str.contains(
             "series"
         ) & n.component_attrs[c.name].status.str.contains("Input")
@@ -257,6 +306,7 @@ if __name__ == "__main__":
 
     # define spatial resolution of carriers
     spatial = define_spatial(n.buses[n.buses.carrier == "AC"].index, options)
+    rename_clashing_vintages(n, snakemake.config["scenario"]["planning_horizons"])
     add_build_year_to_new_assets(n, baseyear)
 
     Nyears = n.snapshot_weightings.generators.sum() / 8760.0

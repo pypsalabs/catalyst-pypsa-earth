@@ -2411,6 +2411,106 @@ if config["foresight"] == "myopic":
                 **config["costs"],
             ),
 
+    # electricity-only myopic optimisation
+
+    def solved_previous_horizon_elec(w):
+        planning_horizons = config["scenario"]["planning_horizons"]
+        i = planning_horizons.index(int(w.planning_horizons))
+        if i == 0:
+            # the first planning horizon starts from the existing capacities only
+            return []
+
+        return (
+            "results/"
+            + RDIR
+            + "networks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_"
+            + str(planning_horizons[i - 1])
+            + ".nc"
+        )
+
+    def costs_planning_horizon_elec(w):
+        # technology costs of new assets built in the planning horizon
+        return "resources/" + RDIR + "costs_{planning_horizons}_elec.csv"
+
+    rule add_brownfield_elec:
+        params:
+            threshold_capacity=config["existing_capacities"]["threshold_capacity"],
+            storage_techs=config["storage_techs"],
+        input:
+            network="networks/" + RDIR + "elec_s{simpl}_{clusters}_ec_l{ll}_{opts}.nc",
+            network_p=solved_previous_horizon_elec,  #solved network at previous time step
+            costs=costs_planning_horizon_elec,
+            costs_base="resources/"
+            + RDIR
+            + f"costs_{config['costs']['year']}_elec.csv",
+        output:
+            "networks/"
+            + RDIR
+            + "elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}.nc",
+        threads: 1
+        resources:
+            mem_mb=10000,
+        log:
+            "logs/"
+            + RDIR
+            + "add_brownfield_elec/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}.log",
+        benchmark:
+            (
+                "benchmarks/"
+                + RDIR
+                + "add_brownfield_elec/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}"
+            )
+        script:
+            "scripts/add_brownfield.py"
+
+    rule solve_network_myopic_elec:
+        params:
+            solving=config["solving"],
+            foresight=config["foresight"],
+            planning_horizons=config["scenario"]["planning_horizons"],
+            augmented_line_connection=config["augmented_line_connection"],
+            policy_config=config["policy_config"],
+        input:
+            network="networks/"
+            + RDIR
+            + "elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}.nc",
+            agg_p_nom_minmax=config["electricity"]["agg_p_nom_limits"]["file"],  # ensure the CSV with capacity constraints is copied into the shadow directory (needed on Windows, since shadowed scripts can’t access files outside `input`)
+        output:
+            "results/"
+            + RDIR
+            + "networks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}.nc",
+        log:
+            solver=os.path.normpath(
+                "logs/"
+                + RDIR
+                + "solve_network/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}_solver.log"
+            ),
+            python="logs/"
+            + RDIR
+            + "solve_network/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}_python.log",
+        benchmark:
+            (
+                "benchmarks/"
+                + RDIR
+                + "solve_network/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}"
+            )
+        threads: 20
+        resources:
+            mem=memory,
+        shadow:
+            "copy-minimal" if os.name == "nt" else "shallow"
+        script:
+            "scripts/solve_network.py"
+
+    rule solve_all_networks_myopic:
+        input:
+            expand(
+                "results/"
+                + RDIR
+                + "networks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{planning_horizons}.nc",
+                **config["scenario"],
+            ),
+
 
 rule run_scenario:
     input:

@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText:  PyPSA-Earth and PyPSA-Eur Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# electricity-only myopic optimisation, used with config.tutorial.yaml
+
+run:
+  name: "test-myopic-elec" # the clustered network keeps the power plant vintages, so it differs from the overnight one
+  shared_cutouts: true
+
+foresight: myopic
+
+scenario:
+  simpl: [""]
+  clusters: [4]
+  planning_horizons:
+  - 2030
+  - 2040
+  ll: ["c1"]
+  opts: ["Co2L-24h"]
+
+solving:
+  solver:
+    name: glpk
