@@ -21,6 +21,7 @@ Relevant Settings
     calibration:
         enable:
         brownfield_only:
+        horizon_tables:
         tables:
             demand:
             capacity:
@@ -622,6 +623,35 @@ def fix_capacities(n):
         f"{len(links)} links and {len(buses)} buses"
     )
     attach_isolated_buses(n)
+
+
+def calibrate_horizon(n, inputs, costs=None):
+    """
+    Apply the tables of one planning horizon in a myopic run.
+
+    Called by ``add_brownfield`` for every planning horizon with the tables of
+    ``calibration.horizon_tables``, whose paths contain ``{planning_horizons}``.
+    The network has been calibrated to the reference year in ``prepare_network``;
+    only the quantities that follow an exogenous pathway are replaced here:
+    annual demand, and fuel and CO2 prices.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+    inputs : dict
+        table name (``demand``, ``fuel_prices``, ``co2_prices``) -> path
+    costs : pd.DataFrame
+        cost table, needed for the price tables
+    """
+    if "demand" in inputs:
+        calibrate_demand(n, _read(inputs["demand"], "country"))
+    if "fuel_prices" in inputs or "co2_prices" in inputs:
+        calibrate_prices(
+            n,
+            costs,
+            _read(inputs["fuel_prices"], ["country", "fuel"]) if "fuel_prices" in inputs else None,
+            _read(inputs["co2_prices"], "country") if "co2_prices" in inputs else None,
+        )
 
 
 def calibrate(n, costs, config, inputs):

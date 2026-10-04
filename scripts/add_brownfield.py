@@ -510,6 +510,20 @@ if __name__ == "__main__":
             snakemake.params.storage_techs,
         )
 
+    # tables of the planning horizon (demand, fuel and CO2 prices), see calibrate_network.py
+    calibration_meta = (n.meta or {}).get("calibration")
+    calibration_tables = {
+        k[len("calibration_") :]: v
+        for k, v in snakemake.input.items()
+        if k.startswith("calibration_")
+    }
+    if calibration_tables:
+        from calibrate_network import calibrate_horizon
+
+        calibrate_horizon(
+            n, calibration_tables, pd.read_csv(snakemake.input.costs, index_col=0)
+        )
+
     rename_clashing_vintages(n, snakemake.config["scenario"]["planning_horizons"])
 
     add_build_year_to_new_assets(n, year)
@@ -532,4 +546,7 @@ if __name__ == "__main__":
     sanitize_locations(n)
 
     n.meta = dict(snakemake.config, **dict(wildcards=dict(snakemake.wildcards)))
+    if calibration_meta is not None:
+        # targets of the solve-time calibration constraints set in prepare_network
+        n.meta["calibration"] = calibration_meta
     n.export_to_netcdf(snakemake.output[0])

@@ -2443,6 +2443,16 @@ if config["foresight"] == "myopic":
             costs_base="resources/"
             + RDIR
             + f"costs_{config['costs']['year']}_elec.csv",
+            **branch(
+                config.get("calibration", {}).get("enable", False),
+                {
+                    f"calibration_{name}": path
+                    for name, path in config.get("calibration", {})
+                    .get("horizon_tables", {})
+                    .items()
+                    if path
+                },
+            ),
         output:
             "networks/"
             + RDIR

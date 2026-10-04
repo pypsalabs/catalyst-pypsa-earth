@@ -604,6 +604,8 @@ calibration:
     co2_prices: ""       # country, price [currency/tCO2]
     envelope: ""         # country, carrier, p_min_pu, p_max_pu, efficiency: must-run floor, availability cap and fleet efficiency
     net_imports: ""      # country, net_imports_twh: annual net imports, enforced as a band in solve_network
+  horizon_tables: {}     # myopic foresight: tables applied per planning horizon in add_brownfield_elec, paths with {planning_horizons};
+                         # keys demand, fuel_prices, co2_prices (formats as in `tables`)
 
 # ------------------- Uncertainty -------------------
 monte_carlo:
