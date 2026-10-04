@@ -643,16 +643,35 @@ def add_land_use_constraint(n):
 
 
 def _add_land_use_constraint(n):
+    """
+    Reduce the potential of extendable renewable generators by the capacity
+    that already exists at the same location.
+
+    Existing capacity is every non-extendable generator of the same carrier,
+    i.e. the vintages from the power plant data and the capacities built in
+    previous planning horizons. Generators are matched by location and carrier
+    rather than by name, so that the constraint works for sector-coupled and
+    electricity-only networks alike.
+    """
     # warning: this will miss existing offwind which is not classed AC-DC and has carrier 'offwind'
 
+    location = pd.Series(n.buses.index, n.buses.index)
+    if "location" in n.buses:
+        location = n.buses.location.replace("", np.nan).fillna(location)
+    gen_location = n.generators.bus.map(location)
+    extendable = n.generators.p_nom_extendable
+
     for carrier in ["solar", "solar rooftop", "onwind", "offwind-ac", "offwind-dc"]:
+        is_carrier = n.generators.carrier == carrier
         existing = (
-            n.generators.loc[n.generators.carrier == carrier, "p_nom"]
-            .groupby(n.generators.bus.map(n.buses.location))
+            n.generators.loc[is_carrier & ~extendable, "p_nom"]
+            .groupby(gen_location)
             .sum()
         )
-        existing.index += " " + carrier + "-" + snakemake.wildcards.planning_horizons
-        n.generators.loc[existing.index, "p_nom_max"] -= existing
+        new_i = n.generators.index[is_carrier & extendable]
+        n.generators.loc[new_i, "p_nom_max"] -= (
+            gen_location[new_i].map(existing).fillna(0.0)
+        )
 
     n.generators.p_nom_max.clip(lower=0, inplace=True)
 
@@ -676,7 +695,7 @@ def _add_land_use_constraint_m(n):
     # if generators clustering is lower than network clustering, land_use accounting is at generators clusters
 
     planning_horizons = snakemake.config["scenario"]["planning_horizons"]
-    grouping_years = snakemake.config["existing_capacities"]["grouping_years"]
+    grouping_years = snakemake.config["existing_capacities"]["grouping_years_power"]
     current_horizon = snakemake.wildcards.planning_horizons
 
     for carrier in ["solar", "solar rooftop", "onwind", "offwind-ac", "offwind-dc"]:
