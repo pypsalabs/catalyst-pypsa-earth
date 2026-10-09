@@ -231,7 +231,7 @@ def calibrate_capacity(n, table, costs):
                     efficiency=costs.at[default, "efficiency"],
                     marginal_cost=costs.at[default, "marginal_cost"],
                     capital_cost=costs.at[default, "capital_cost"],
-                    lifetime=costs.at[default, "lifetime"],
+                    lifetime=np.inf,  # statistical capacity without a date: never retired
                 )
                 logger.info(f"capacity {c} {group}: added {target/1e3:.2f} GW {default} at {bus}")
                 continue
