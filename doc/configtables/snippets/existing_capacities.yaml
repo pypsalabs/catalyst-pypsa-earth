@@ -3,6 +3,7 @@ existing_capacities:
   grouping_years_heat: [1980, 1985, 1990, 1995, 2000, 2005, 2010, 2015, 2019] # these should not extend 2020
   threshold_capacity: 10
   retire_existing: true # myopic: remove existing assets at the end of their lifetime (build_year + lifetime)
+  fill_missing_dateout: true # fill a missing retirement year of a power plant with its commissioning year + technology lifetime; false: such plants are never retired
   default_heating_lifetime: 20
   conventional_carriers:
   - lignite

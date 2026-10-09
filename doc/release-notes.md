@@ -14,6 +14,8 @@ This part of documentation collects descriptive release notes to capture the mai
 
 * Myopic foresight for the electricity-only model: with ``foresight: myopic`` the new target ``solve_all_networks_myopic`` solves the years of ``scenario: planning_horizons`` in sequence (rules ``add_brownfield_elec`` and ``solve_network_myopic_elec``). Capacities built in a horizon are carried to the next ones, new assets are built at the technology costs of the horizon, and existing assets are removed at the end of their lifetime (``existing_capacities: retire_existing``, also applied in the sector-coupled ``add_brownfield``).
 
+* New option ``existing_capacities: fill_missing_dateout``: with ``false`` power plants without a reported retirement year are never retired instead of being assigned one from the commissioning year and the technology lifetime; plants with a reported retirement year are grouped by it as well.
+
 **Minor Changes and bug-fixing**
 
 * The land-use constraint of myopic runs matches existing and extendable renewable generators by location and carrier instead of by name, and no longer subtracts the capacity of an extendable generator from its own potential.

@@ -90,6 +90,8 @@ def rename_clashing_vintages(n: pypsa.Network, planning_horizons: list):
     for c in n.iterate_components(["Link", "Generator", "Store", "StorageUnit"]):
         clashing = c.df.index[
             c.df.index.str.endswith(suffixes)
+            # "<carrier>-<grouping year>-<retirement year>" never clashes
+            & ~c.df.index.str.contains(r"-\d{4}-\d{4}$")
             & (c.df.build_year != 0)
             & (c.df.build_year.astype(int).astype(str) != c.df.index.str[-4:])
         ]

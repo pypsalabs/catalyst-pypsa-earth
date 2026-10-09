@@ -449,15 +449,20 @@ if __name__ == "__main__":
     if custom_method == "replace":
         ppl = pd.DataFrame()
     else:
-        ppl = (
-            pm.powerplants(
-                from_url=False,
-                update=True,
-                config_update=config,
-            )
-            .powerplant.fill_missing_decommissioning_years()
-            .query("Country in @countries_names")
+        ppl = pm.powerplants(
+            from_url=False,
+            update=True,
+            config_update=config,
         )
+        if snakemake.params.get("fill_missing_dateout", True):
+            # commissioning years from the fleet mean, decommissioning years from
+            # the commissioning year and the lifetime per fuel type
+            ppl = ppl.powerplant.fill_missing_decommissioning_years()
+        else:
+            # keep the retirement dates reported by the sources (announced or
+            # realised closures); plants without one are not retired later on
+            ppl = ppl.powerplant.fill_missing_commissioning_years()
+        ppl = ppl.query("Country in @countries_names")
 
     ppl = add_custom_powerplants(
         ppl=ppl,

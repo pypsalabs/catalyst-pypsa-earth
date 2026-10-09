@@ -2246,10 +2246,12 @@ def add_missing_carriers(n: pypsa.Network, carriers: Iterable) -> None:
             n.add("Carrier", carrier)
 
 
+YEAR_TAGS = r"(-\d{4})+$"
+
+
 def _is_year_tagged(carrier: str) -> bool:
-    """Return True if carrier ends with a 4-digit year suffix (e.g. 'solar-2020')."""
-    parts = carrier.rsplit("-", 1)
-    return len(parts) == 2 and parts[1].isdigit() and len(parts[1]) == 4
+    """Return True if carrier ends with 4-digit year suffixes (e.g. 'solar-2020', 'coal-1985-2033')."""
+    return re.search(YEAR_TAGS, carrier) is not None
 
 
 def get_base_carrier(carrier: str) -> str:
@@ -2261,10 +2263,9 @@ def get_base_carrier(carrier: str) -> str:
         "offwind-ac-2020" -> "offwind-ac"
         "offwind-dc" -> "offwind-dc"
         "CCGT-2000" -> "CCGT"
+        "coal-1985-2033" -> "coal"  (vintage 1985 with a reported retirement in 2033)
     """
-    if _is_year_tagged(carrier):
-        return carrier.rsplit("-", 1)[0]
-    return carrier
+    return re.sub(YEAR_TAGS, "", carrier)
 
 
 def restore_base_carrier_names(n: pypsa.Network) -> None:
@@ -2318,9 +2319,10 @@ def add_year_suffix_to_carriers(n: pypsa.Network) -> None:
         if df.empty or "carrier" not in df.columns:
             continue
 
-        # Extract year suffix from index using regex
-        # Pattern matches: base_name-YYYY at the end of the string
-        pattern = r"-(\d{4})$"
+        # Extract year suffixes from index using regex
+        # Pattern matches: base_name-YYYY or base_name-YYYY-YYYY (vintage and
+        # reported retirement year) at the end of the string
+        pattern = r"((?:-\d{4})+)$"
 
         year_suffix = df.index.str.extract(pattern, expand=False)
 
@@ -2329,7 +2331,7 @@ def add_year_suffix_to_carriers(n: pypsa.Network) -> None:
 
         if has_year.any():
             df.loc[has_year, "carrier"] = (
-                df.loc[has_year, "carrier"] + "-" + year_suffix[has_year]
+                df.loc[has_year, "carrier"] + year_suffix[has_year]
             )
 
     # Add year suffixes to carriers for proper clustering of different vintage years

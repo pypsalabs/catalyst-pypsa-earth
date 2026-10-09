@@ -116,6 +116,7 @@ def load_powerplants(
     costs: pd.DataFrame = None,
     fill_values: dict = None,
     grouping_years: list = None,
+    fill_dateout: bool = True,
 ) -> pd.DataFrame:
     """
     Load and preprocess powerplant matching data, fill missing datein/dateout, and assign grouping years.
@@ -129,6 +130,10 @@ def load_powerplants(
         Dictionary containing default values for lifetime.
     grouping_years : list
         List of years to group build years into.
+    fill_dateout : bool
+        Fill a missing decommissioning year with the commissioning year plus the
+        technology lifetime. If False, plants without a reported decommissioning
+        year get an infinite lifetime and are never retired.
 
     Returns
     -------
@@ -162,17 +167,25 @@ def load_powerplants(
 
     # Fill missing datein and dateout columns
     if costs is not None and fill_values is not None:
-        ppl = fill_datein_dateout(ppl, costs, fill_values)
+        ppl = fill_datein_dateout(ppl, costs, fill_values, fill_dateout)
 
     # Assign grouping years
     if grouping_years is not None:
         ppl["grouping_year"] = get_grouping_year(ppl["datein"], grouping_years)
 
+    # Without filled decommissioning years, a reported one is part of the vintage
+    # group (see assign_carrier_gy)
+    if not fill_dateout:
+        ppl["retirement_tag"] = "-" + ppl["dateout"].dropna().astype(int).astype(str)
+
     return ppl
 
 
 def fill_datein_dateout(
-    ppl: pd.DataFrame, costs: pd.DataFrame, fill_values: dict
+    ppl: pd.DataFrame,
+    costs: pd.DataFrame,
+    fill_values: dict,
+    fill_dateout: bool = True,
 ) -> pd.DataFrame:
     """
     Fill missing datein and dateout values in ppl DataFrame.
@@ -185,6 +198,9 @@ def fill_datein_dateout(
         DataFrame containing cost assumptions.
     fill_values : dict
         Dictionary containing default values for lifetime.
+    fill_dateout : bool
+        Whether to fill missing dateout values; plants without one are never
+        retired (see ``aggregate_ppl_by_bus_carrier_year``).
 
     Returns
     -------
@@ -210,7 +226,7 @@ def fill_datein_dateout(
             )
 
     # Fill missing dateout based on lifetime from costs DataFrame
-    if ppl["dateout"].isna().any():
+    if fill_dateout and ppl["dateout"].isna().any():
         missing_dateout = ppl[ppl["dateout"].isna()].index
         ppl.loc[missing_dateout, "dateout"] = ppl.loc[
             missing_dateout, "datein"
@@ -310,12 +326,35 @@ def get_grouping_year(build_year: int, grouping_years: list) -> int:
     return np.take(grouping_years, indices)
 
 
+def assign_carrier_gy(ppl: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add the ``carrier_gy`` column naming the vintage group of each power plant.
+
+    The group is ``"{carrier}-{grouping_year}"``. Without filling of missing
+    decommissioning years (``fill_dateout=False`` in ``load_powerplants``), plants
+    with a reported year are grouped by it as well,
+    ``"{carrier}-{grouping_year}-{dateout}"`` (column ``retirement_tag``), so that
+    announced retirements apply to them alone and the others keep an infinite
+    lifetime. The year has to be part of the name, because ``simplify_network``
+    and ``cluster_network`` aggregate generators by the year suffixes of their
+    names: a dated and an undated group of the same vintage at two buses of a
+    cluster would otherwise merge into one undated generator.
+    """
+    ppl = ppl.copy()
+    ppl["carrier_gy"] = ppl["carrier"] + "-" + ppl["grouping_year"].astype(str)
+    if "retirement_tag" in ppl.columns:
+        ppl["carrier_gy"] += ppl["retirement_tag"].fillna("")
+    return ppl
+
+
 def aggregate_ppl_by_bus_carrier_year(ppl: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate power plants by (bus, carrier, grouping_year).
 
     Creates a new carrier name with grouping year suffix (e.g., "CCGT-2020")
-    and aggregates capacity and other attributes.
+    and aggregates capacity and other attributes. Plants with a reported
+    decommissioning year in a group of plants without one form their own group
+    (see ``assign_carrier_gy``).
 
     Parameters
     ----------
@@ -343,8 +382,7 @@ def aggregate_ppl_by_bus_carrier_year(ppl: pd.DataFrame) -> pd.DataFrame:
         bus1   CCGT     CCGT-2020    150
     """
     # Add grouping year to carrier name
-    ppl = ppl.copy()
-    ppl["carrier_gy"] = ppl["carrier"] + "-" + ppl["grouping_year"].astype(str)
+    ppl = assign_carrier_gy(ppl)
 
     # Group by (bus, carrier_gy) and aggregate
     agg_dict = {
@@ -403,17 +441,12 @@ def aggregate_inflow_by_group(
         Aggregated inflow time series with ppl_grouped indices as columns.
     """
     inflow_dict = {}
+    ppl = assign_carrier_gy(ppl)
     for idx in ppl_grouped.index:
         bus = ppl_grouped.at[idx, "bus"]
         carrier_gy = ppl_grouped.at[idx, "carrier_gy"]
-        grouping_year = int(carrier_gy.rsplit("-", 1)[1])
-        carrier = ppl_grouped.at[idx, "carrier"]
 
-        mask = (
-            (ppl["bus"] == bus)
-            & (ppl["carrier"] == carrier)
-            & (ppl["grouping_year"] == grouping_year)
-        )
+        mask = (ppl["bus"] == bus) & (ppl["carrier_gy"] == carrier_gy)
         original_plants = ppl[mask].index
         valid_plants = original_plants[original_plants.isin(inflow_t.columns)]
 
@@ -1258,6 +1291,7 @@ if __name__ == "__main__":
         costs,
         snakemake.params.fill_values,
         snakemake.params.existing_capacities["grouping_years_power"],
+        snakemake.params.existing_capacities.get("fill_missing_dateout", True),
     )
 
     if "renewable_carriers" in snakemake.params.electricity:
