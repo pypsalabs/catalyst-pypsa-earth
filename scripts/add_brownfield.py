@@ -134,6 +134,41 @@ def remove_retired_assets(n: pypsa.Network, year: int) -> None:
         n.mremove(c.name, retired)
 
 
+def fix_capacities(n: pypsa.Network) -> None:
+    """
+    Fixes the capacity of every extendable asset at its lower bound, so that the
+    planning horizon is solved as a dispatch of the existing system without
+    expansion (``existing_capacities: dispatch_only_horizons``).
+
+    The assets stay extendable: the existing capacity of a renewable carrier is
+    the lower bound of its extendable generator, and ``add_brownfield`` carries
+    the optimised capacity of extendable assets into the next planning horizon.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network prepared for the planning horizon.
+
+    Returns
+    -------
+    None
+    """
+    for c in n.iterate_components(
+        ["Line", "Link", "Generator", "Store", "StorageUnit"]
+    ):
+        attr = {"Line": "s", "Store": "e"}.get(c.name, "p")
+        extendable = c.df.index[c.df[f"{attr}_nom_extendable"]]
+        if extendable.empty:
+            continue
+        c.df.loc[extendable, f"{attr}_nom_max"] = c.df.loc[
+            extendable, f"{attr}_nom_min"
+        ]
+        logger.info(
+            f"Dispatch-only horizon: {len(extendable)} extendable {c.name} assets fixed at "
+            f"{c.df.loc[extendable, f'{attr}_nom_min'].sum() / 1e3:.1f} GW(h)"
+        )
+
+
 def update_capital_costs(
     n: pypsa.Network,
     costs: pd.DataFrame,
@@ -200,11 +235,21 @@ def update_capital_costs(
             if carrier.startswith("offwind")
             else [carrier]
         )
-        shift("Generator", gens.index[gens.carrier == carrier], difference(entries), carrier)
+        shift(
+            "Generator",
+            gens.index[gens.carrier == carrier],
+            difference(entries),
+            carrier,
+        )
 
     sus = n.storage_units[n.storage_units.p_nom_extendable]
     for carrier in sus.carrier.unique():
-        shift("StorageUnit", sus.index[sus.carrier == carrier], difference([carrier]), carrier)
+        shift(
+            "StorageUnit",
+            sus.index[sus.carrier == carrier],
+            difference([carrier]),
+            carrier,
+        )
 
     stores = n.stores[n.stores.e_nom_extendable]
     links = n.links[n.links.p_nom_extendable]
@@ -541,6 +586,11 @@ if __name__ == "__main__":
         add_brownfield(n, n_p, year, sector_coupled=is_sector_coupled)
 
         disable_grid_expansion_if_limit_hit(n)
+
+    if year in snakemake.config["existing_capacities"].get(
+        "dispatch_only_horizons", []
+    ):
+        fix_capacities(n)
 
     sanitize_carriers(n, snakemake.config)
     sanitize_locations(n)

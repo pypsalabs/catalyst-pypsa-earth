@@ -156,7 +156,7 @@ foresight: myopic
 Scenarios can be defined like for electricity-only studies, but with additional wildcard options. For the myopic foresight mode, the `{planning_horizons}` wildcard defines the sequence of investment horizons.
 
 !!! hint
- The myopic optimisation is also available for the electricity-only model: set `foresight: myopic` and run `snakemake -j 1 solve_all_networks_myopic`. Each planning horizon then starts from the existing power plants that have not reached the end of their lifetime and from the capacities built in the previous horizons, and new assets are built at the technology costs of the horizon.
+ The myopic optimisation is also available for the electricity-only model: set `foresight: myopic` and run `snakemake -j 1 solve_all_networks_myopic`. Each planning horizon then starts from the existing power plants that have not reached the end of their lifetime and from the capacities built in the previous horizons, and new assets are built at the technology costs of the horizon. Horizons listed in `existing_capacities: dispatch_only_horizons` are solved without expansion, e.g. a base year that validates the existing system; with `existing_capacities: fill_missing_dateout: false` only the retirement years reported by the power plant data apply and plants without one are never retired.
 
 ```yaml
 scenario:

@@ -698,6 +698,7 @@ existing_capacities:
   grouping_years_heat: [1980, 1985, 1990, 1995, 2000, 2005, 2010, 2015, 2019] # these should not extend 2020
   threshold_capacity: 10
   retire_existing: true # myopic: remove existing assets at the end of their lifetime (build_year + lifetime)
+  dispatch_only_horizons: [] # myopic: planning horizons solved without expansion (every extendable capacity fixed at its lower bound), e.g. the base year
   default_heating_lifetime: 20
   conventional_carriers:
   - lignite
