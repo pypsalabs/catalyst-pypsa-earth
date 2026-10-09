@@ -16,6 +16,8 @@ This part of documentation collects descriptive release notes to capture the mai
 
 * New option ``existing_capacities: fill_missing_dateout``: with ``false`` power plants without a reported retirement year are never retired instead of being assigned one from the commissioning year and the technology lifetime; plants with a reported retirement year are grouped by it as well.
 
+* New option ``existing_capacities: dispatch_only_horizons``: planning horizons of a myopic run that are solved without expansion (every extendable capacity fixed at its lower bound), for a base year that validates the existing system before the expansion starts.
+
 **Minor Changes and bug-fixing**
 
 * The land-use constraint of myopic runs matches existing and extendable renewable generators by location and carrier instead of by name, and no longer subtracts the capacity of an extendable generator from its own potential.

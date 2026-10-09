@@ -699,6 +699,7 @@ existing_capacities:
   threshold_capacity: 10
   retire_existing: true # myopic: remove existing assets at the end of their lifetime (build_year + lifetime)
   fill_missing_dateout: true # fill a missing retirement year of a power plant with its commissioning year + technology lifetime; false: such plants are never retired
+  dispatch_only_horizons: [] # myopic: planning horizons solved without expansion (every extendable capacity fixed at its lower bound), e.g. the base year
   default_heating_lifetime: 20
   conventional_carriers:
   - lignite

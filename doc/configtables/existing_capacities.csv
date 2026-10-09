@@ -4,5 +4,6 @@ grouping_years_heat,list of years,,Vintage grouping years for existing heating c
 threshold_capacity,MW,,Minimum installed capacity [MW] for an asset to be included when building existing capacities.
 retire_existing,bool,"{true, false}",Myopic foresight: remove existing assets with a fixed capacity from a planning horizon once ``build_year + lifetime`` lies before it (``add_brownfield``).
 fill_missing_dateout,bool,"{true, false}","Fill a missing decommissioning year of a power plant with its commissioning year plus the technology lifetime (``build_powerplants``, ``add_electricity``). With ``false`` only the retirement years reported by the data sources apply and plants without one get an infinite lifetime, i.e. they are never retired; dated plants are then grouped by their retirement year as well (``<bus> <carrier>-<grouping year>-<retirement year>``)."
+dispatch_only_horizons,list of years,,"Myopic foresight: planning horizons that are solved as a dispatch of the existing system, i.e. every extendable capacity is fixed at its lower bound (``add_brownfield``). Typically the first horizon, when it is the base year of the existing capacities."
 default_heating_lifetime,years,,Default lifetime [years] for existing heating assets when missing from input data.
 conventional_carriers,list,,Carriers listed for existing-capacity handling alongside brownfield data.
