@@ -1,6 +1,8 @@
 Parameter,Unit,Values,Description
 enable,bool,"{true, false}","Calibrate the clustered network to per-country statistics of a reference year in ``prepare_network`` (``scripts/calibrate_network.py``). Every table below is optional; a missing key skips that step."
 brownfield_only,bool,"{true, false}","Freeze every generator at its calibrated ``p_nom`` and drop the extendable stores so the solve is a pure dispatch of the calibrated fleet, e.g. for a validation year; transmission follows the ``ll`` wildcard."
+reference_year,--,int or ``null``,"Year of the tables; generators with a later ``build_year`` (plants under construction kept by ``powerplants_filter``) are left out of the capacity calibration."
+fuel_map,--,dict,"Generator carrier → fuel of ``fuel_prices`` for carriers beyond the defaults (``coal, lignite, CCGT, OCGT, oil, nuclear, biomass``), e.g. a gas-fired fuel cell → ``gas``."
 efficiency_spread,--,float,"If > 0, every fuel-burning generator is split into ``tranches`` equal parts whose efficiencies are spread by ±this fraction around the fleet value, giving a staircase merit order per carrier."
 tranches,--,int,Number of efficiency tranches per generator (with ``efficiency_spread`` > 0).
 net_import_tolerance,--,float,"Half-width of the annual net-import band relative to the target (floor 1 TWh), see ``net_imports``."
