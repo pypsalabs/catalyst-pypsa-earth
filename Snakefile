@@ -540,6 +540,10 @@ rule process_cost_data:
             "resources/" + RDIR + "costs_{year}.csv",
             "data/costs.csv",
         ),
+        **branch(
+            bool(config["costs"].get("overrides")),
+            {"overrides": config["costs"].get("overrides") or ""},
+        ),
     output:
         "resources/" + RDIR + "costs_{year}_{scope}.csv",
     log:

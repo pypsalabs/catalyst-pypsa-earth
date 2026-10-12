@@ -42,8 +42,10 @@ Relevant Settings
     Documentation of the configuration file ``config.yaml`` at :ref:`costs_cf`,
     :ref:`electricity_cf`
 """
+
 import logging
 
+import numpy as np
 import pandas as pd
 import pypsa
 from currency_converter import CurrencyConverter
@@ -294,6 +296,37 @@ def apply_currency_conversion(
     return cost_dataframe
 
 
+def read_cost_table(tech_costs: str, overrides: str | None = None) -> pd.DataFrame:
+    """
+    Read the technology-data cost table, with optional overrides.
+
+    Parameters
+    ----------
+    tech_costs : str
+        Path to the technology-data CSV (``technology, parameter, value, unit, ...``).
+    overrides : str, optional
+        Path to a CSV in the same format (``costs: overrides``). Its rows replace the
+        rows of ``tech_costs`` with the same technology and parameter and add the
+        others, so that technologies missing from technology-data can be supplied.
+
+    Returns
+    -------
+    pd.DataFrame
+        Cost table indexed by (technology, parameter).
+    """
+    costs = pd.read_csv(tech_costs)
+    if overrides:
+        extra = pd.read_csv(overrides)
+        logger.info(
+            f"Overriding or adding {len(extra)} cost table rows "
+            f"({extra.technology.nunique()} technologies) from {overrides}"
+        )
+        keys = ["technology", "parameter"]
+        replaced = costs.set_index(keys).index.isin(extra.set_index(keys).index)
+        costs = pd.concat([costs[~replaced], extra], ignore_index=True)
+    return costs.set_index(["technology", "parameter"]).sort_index()
+
+
 def calculate_cost_for_storage_units(
     costs: pd.DataFrame,
     max_hours: dict,
@@ -330,6 +363,7 @@ def calculate_cost_for_storage_units(
                 costs_name: capital_cost,
                 "marginal_cost": 0.0,
                 "CO2 intensity": 0.0,
+                "lifetime": store.get("lifetime", np.nan),
             }
         )
 
@@ -380,6 +414,7 @@ def load_costs(
     max_hours: int,
     Nyears: float | int = 1,
     storage_techs: dict = {},
+    overrides: str | None = None,
 ) -> pd.DataFrame:
     """
     Set all asset costs and other parameters. Used only in the electricity sector workflow.
@@ -396,13 +431,15 @@ def load_costs(
         Share of years represented by the model time steps (default is 1, representing one full year).
     storage_techs : dict, optional
         A dictionary mapping storage carriers to their respective technology parameters.
+    overrides : str, optional
+        Path to a CSV in the technology-data format whose rows replace or add to the table (``costs: overrides``).
 
     Returns
     -------
     pd.DataFrame
         DataFrame indexed by technology with columns for capital_cost, marginal_cost, co2_emissions, and any other relevant parameters.
     """
-    costs = pd.read_csv(tech_costs, index_col=["technology", "parameter"]).sort_index()
+    costs = read_cost_table(tech_costs, overrides)
 
     # correct units to MW and output_currency
     costs.loc[costs.unit.str.contains("/kW"), "value"] *= 1e3
@@ -509,6 +546,7 @@ def prepare_costs(
     custom_future_exchange_rate: float = None,
     max_hours: dict = {},
     storage_techs: dict = {},
+    overrides: str | None = None,
 ) -> pd.DataFrame:
     """
     Loads and processes cost data, converting units and currency to a common format.
@@ -541,13 +579,15 @@ def prepare_costs(
         Custom exchange rate to use if future_exchange_rate_strategy is "custom".
     storage_techs : dict, optional
         A dictionary mapping storage carriers to their respective technology parameters.
+    overrides : str, optional
+        Path to a CSV in the technology-data format whose rows replace or add to the table (``costs: overrides``).
 
     Returns
     -------
     pd.DataFrame
         DataFrame indexed by technology with columns for fixed (annualized capital cost), marginal_cost, co2_emissions, and any other relevant parameters.
     """
-    costs = pd.read_csv(cost_file, index_col=[0, 1]).sort_index()
+    costs = read_cost_table(cost_file, overrides)
 
     # correct units to MW
     costs.loc[costs.unit.str.contains("/kW"), "value"] *= 1e3
@@ -640,6 +680,7 @@ if __name__ == "__main__":
             snakemake.params.max_hours,
             Nyears,
             snakemake.params.storage_techs,
+            overrides=snakemake.input.get("overrides"),
         )
 
     if snakemake.wildcards.scope == "sec":
@@ -654,6 +695,7 @@ if __name__ == "__main__":
             snakemake.params.costs["custom_future_exchange_rate"],
             snakemake.params.max_hours,
             snakemake.params.storage_techs,
+            overrides=snakemake.input.get("overrides"),
         )
 
     costs.to_csv(snakemake.output[0])

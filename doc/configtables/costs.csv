@@ -1,6 +1,7 @@
 Parameter,Unit,Values,Description
 year,--,"YYYY (e.g. 2030)",Year for which to retrieve cost assumptions for resources/costs.csv
 technology_data_version,--,"vX.X.X (e.g. v0.1.0)",Version of technology-data repository to use
+overrides,--,"path or empty","CSV in the technology-data format (``technology, parameter, value, unit, source, further description, currency_year``) whose rows replace the rows of the retrieved table with the same technology and parameter and add the others, before units, currency and annuities are processed; e.g. for technologies not in technology-data. The path may contain ``{year}``."
 discountrate,--,float,Rate of return used to discount future cash flows back to their present value
 country_specific_data,bool,"{True, False}",Reference to the desired technology-data directory for techno-economic input data
 cost_scenario,--,"{moderate, advanced, conservative}",Only used if country_specific_data is set to select the desired NREL financial case
