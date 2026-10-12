@@ -22,6 +22,8 @@ This part of documentation collects descriptive release notes to capture the mai
 
 * Myopic runs leave out existing assets whose build year is after the planning horizon (``add_brownfield``), so that power plants under construction, kept by ``powerplants_filter`` with their planned commissioning year, enter the model in the first horizon on or after it.
 
+* New config block ``supply_curves``: site-specific technologies (e.g. enhanced geothermal) are built as a few tranches per cluster region from a per-cell table of potentials and costs (new rule ``build_supply_curve``, attached in ``add_extra_components``), with an hourly profile from the cutout's air temperature where the output depends on it. In myopic runs the tranche costs follow the cost table rows of their components, and the land-use constraint nets out the capacity built in earlier horizons per tranche.
+
 * New option ``existing_capacities: dispatch_only_horizons``: planning horizons of a myopic run that are solved without expansion (every extendable capacity fixed at its lower bound), for a base year that validates the existing system before the expansion starts.
 
 **Minor Changes and bug-fixing**

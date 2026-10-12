@@ -79,6 +79,7 @@ import logging
 import numpy as np
 import pandas as pd
 import pypsa
+from process_cost_data import annuity
 import xarray as xr
 from _helpers import (
     configure_logging,
@@ -174,6 +175,7 @@ def update_capital_costs(
     costs: pd.DataFrame,
     costs_base: pd.DataFrame,
     storage_techs: dict,
+    supply_curves: list = (),
 ) -> None:
     """
     Moves the capital costs of the extendable assets to the planning horizon.
@@ -196,6 +198,11 @@ def update_capital_costs(
         Cost table the network was built with.
     storage_techs : dict
         The ``storage_techs`` config block: storage carrier -> cost table entries.
+    supply_curves : list
+        Carriers built from site-specific supply curves (``supply_curves`` config):
+        their tranche generators carry their investment per cost component
+        (``capex_<component>``), which is moved by the investment ratio of the cost
+        table rows ``<carrier>-<component>`` instead of by the difference of a row.
 
     Returns
     -------
@@ -230,6 +237,8 @@ def update_capital_costs(
 
     gens = n.generators[n.generators.p_nom_extendable]
     for carrier in gens.carrier.unique():
+        if carrier in supply_curves:
+            continue
         entries = (
             ["offwind", carrier + "-station"]
             if carrier.startswith("offwind")
@@ -241,6 +250,28 @@ def update_capital_costs(
             difference(entries),
             carrier,
         )
+
+    Nyears = n.snapshot_weightings.objective.sum() / 8760.0
+    for carrier in supply_curves:
+        idx = gens.index[gens.carrier == carrier]
+        if idx.empty or carrier not in costs.index:
+            continue
+        a = annuity(costs.at[carrier, "lifetime"], costs.at[carrier, "discount rate"])
+        delta = pd.Series(0.0, index=idx)
+        for col in n.generators.columns:
+            if not col.startswith("capex_"):
+                continue
+            row = f"{carrier}-{col[len('capex_'):]}"
+            if row not in costs.index or row not in costs_base.index:
+                continue
+            ratio = costs.at[row, "investment"] / costs_base.at[row, "investment"]
+            delta += n.generators.loc[idx, col].astype(float) * (ratio - 1.0)
+        if (delta != 0.0).any():
+            df = n.generators
+            df.loc[idx, "capital_cost"] = (
+                df.loc[idx, "capital_cost"] + Nyears * 1e3 * a * delta
+            ).clip(lower=0.0)
+            changes[carrier] = float((Nyears * 1e3 * a * delta).mean())
 
     sus = n.storage_units[n.storage_units.p_nom_extendable]
     for carrier in sus.carrier.unique():
@@ -588,6 +619,7 @@ if __name__ == "__main__":
             pd.read_csv(snakemake.input.costs, index_col=0),
             pd.read_csv(snakemake.input.costs_base, index_col=0),
             snakemake.params.storage_techs,
+            snakemake.params.get("supply_curves", []),
         )
 
     # tables of the planning horizon (demand, fuel and CO2 prices), see calibrate_network.py

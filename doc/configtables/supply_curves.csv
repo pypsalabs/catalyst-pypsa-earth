@@ -1,0 +1,9 @@
+Parameter,Unit,Values,Description
+supply_curves,,,"Site-specific technologies (e.g. enhanced geothermal) built as a few tranches per cluster region from a per-cell table; one key per technology (its carrier). Empty = none."
+-- potential,file,path,"CSV with one row per cell: ``lon``, ``lat``, ``capacity_mw`` (developable capacity), ``fom_usd_per_kw_yr``, ``lifetime_years``, ``capacity_factor``, the component columns of ``components`` (investment per kW, in the currency of the cost table) and, optionally, ``t_design_c`` plus ``ambient_m20``, ``ambient_m10``, ``ambient_p10``, ``ambient_p20`` (output relative to the design point at air temperatures 20 and 10 K below and above it)."
+-- cutout,--,"name of a cutout in ``atlite: cutouts``","Cutout whose hourly ``temperature`` drives the profile of each tranche (piecewise-linear interpolation of the ambient response, normalised to an annual mean of one)."
+-- components,--,dict,"Cost component → column of ``potential`` (investment per kW). The sum is the tranche's investment; in myopic runs the cost table rows ``<technology>-<component>`` (``investment``) scale each component between planning horizons."
+-- tranches,--,int,"Maximum number of tranches (generators) per cluster region: cells are binned by investment with ``capex_bins`` and adjacent bins with the smallest combined capacity are merged until at most this many remain."
+-- capex_bins,currency/kW,list,"Edges of the investment bins; cells above the last edge are dropped."
+-- developable_share,--,float,"Share of the table's ``capacity_mw`` that can be developed (on top of the land exclusions the table already contains)."
+-- filter,--,"pandas query",Optional filter on the rows of the table.

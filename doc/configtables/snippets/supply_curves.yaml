@@ -1,0 +1,13 @@
+supply_curves: {} # extendable generators whose potential and cost depend on the site (e.g. enhanced geothermal): a per-cell table
+                  # is binned into a few tranches per cluster region (scripts/build_supply_curve.py, attached in add_extra_components), e.g.
+# supply_curves:
+#   egs:
+#     potential: data/egs_potential.csv # one row per cell: lon, lat, capacity_mw, fom_usd_per_kw_yr, lifetime_years, capacity_factor,
+#                                       # the component columns below and, for the hourly ambient-temperature response, t_design_c + ambient_m20/m10/p10/p20
+#     cutout: cutout-2013-era5          # cutout whose temperature drives the hourly profile
+#     components: {drilling: well_capex_usd_per_kw, plant: plant_capex_usd_per_kw} # cost component -> column (per kW); the cost table rows
+#                                       # <technology>-<component> move the tranche costs between planning horizons (myopic)
+#     tranches: 5                       # at most this many generators per cluster region
+#     capex_bins: [0, 6000, 8000, 10000, 12000, 15000, 20000] # specific investment edges of the bins; cells above the last edge are dropped
+#     developable_share: 0.3            # share of the table's capacity that can be developed
+#     filter: "not remote_territory"    # optional pandas query on the table

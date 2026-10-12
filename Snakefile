@@ -896,15 +896,57 @@ if config["augmented_line_connection"].get("add_to_snakefile") == True:
             "scripts/augmented_line_connections.py"
 
 
+if config.get("supply_curves"):
+
+    rule build_supply_curve:
+        params:
+            supply_curves=config["supply_curves"],
+        input:
+            potential=lambda w: config["supply_curves"][w.technology]["potential"],
+            cutout=lambda w: "cutouts/"
+            + CDIR
+            + config["supply_curves"][w.technology]["cutout"]
+            + ".nc",
+            regions="resources/"
+            + RDIR
+            + "bus_regions/regions_onshore_elec_s{simpl}_{clusters}.geojson",
+        output:
+            "resources/"
+            + RDIR
+            + "supply_curves/supply_curve_{technology}_elec_s{simpl}_{clusters}.nc",
+        log:
+            "logs/"
+            + RDIR
+            + "build_supply_curve_{technology}_elec_s{simpl}_{clusters}.log",
+        benchmark:
+            (
+                "benchmarks/"
+                + RDIR
+                + "build_supply_curve_{technology}_elec_s{simpl}_{clusters}"
+            )
+        threads: 1
+        resources:
+            mem_mb=4000,
+        script:
+            "scripts/build_supply_curve.py"
+
+
 rule add_extra_components:
     params:
         storage_techs=config["storage_techs"],
         transmission_efficiency=config["sector"]["transmission_efficiency"],
         electricity=config["electricity"],
         csp_model=config["renewable"]["csp"]["csp_model"],
+        supply_curves=config.get("supply_curves", {}) or {},
     input:
         network="networks/" + RDIR + "elec_s{simpl}_{clusters}.nc",
         tech_costs="resources/" + RDIR + f"costs_{config['costs']['year']}_elec.csv",
+        **{
+            f"supply_curve_{t}": "resources/"
+            + RDIR
+            + f"supply_curves/supply_curve_{t}_elec_s{{simpl}}_{{clusters}}.nc"
+            for t in config.get("supply_curves", {}) or {}
+        },
     output:
         "networks/" + RDIR + "elec_s{simpl}_{clusters}_ec.nc",
     log:
@@ -2443,6 +2485,7 @@ if config["foresight"] == "myopic":
         params:
             threshold_capacity=config["existing_capacities"]["threshold_capacity"],
             storage_techs=config["storage_techs"],
+            supply_curves=list(config.get("supply_curves", {}) or {}),
         input:
             network="networks/" + RDIR + "elec_s{simpl}_{clusters}_ec_l{ll}_{opts}.nc",
             network_p=solved_previous_horizon_elec,  #solved network at previous time step
