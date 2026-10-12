@@ -289,6 +289,37 @@ def remove_not_yet_built(n: pypsa.Network, year: int) -> None:
     """
     Removes existing assets whose build year is after the planning horizon.
 
+    Power plants under construction enter the power plant data with their planned
+    commissioning year as build year (``powerplants_filter`` permitting). PyPSA only
+    honours ``build_year`` in multi-period optimisations, so in a myopic run such an
+    asset has to be left out of every horizon before its build year. Every horizon
+    starts from the same prepared network, so the asset appears in the first horizon
+    on or after its build year.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network prepared for the planning horizon.
+    year : int
+        The planning horizon year.
+
+    Returns
+    -------
+    None
+    """
+    for c in n.iterate_components(["Link", "Generator", "Store", "StorageUnit"]):
+        attr = "e" if c.name == "Store" else "p"
+        future = c.df.index[~c.df[f"{attr}_nom_extendable"] & (c.df.build_year > year)]
+        if future.empty:
+            continue
+        capacity = c.df.loc[future].groupby("carrier")[f"{attr}_nom"].sum()
+        logger.info(
+            f"Leaving out {len(future)} {c.name} assets built after {year}, "
+            f"capacity by carrier:\n{capacity.round(1).to_string()}"
+        )
+        n.mremove(c.name, future)
+
+
 def add_brownfield(
     n: pypsa.Network, n_p: pypsa.Network, year: int, sector_coupled: bool = True
 ) -> None:
@@ -570,7 +601,10 @@ if __name__ == "__main__":
         from calibrate_network import calibrate_horizon
 
         calibrate_horizon(
-            n, calibration_tables, pd.read_csv(snakemake.input.costs, index_col=0)
+            n,
+            calibration_tables,
+            pd.read_csv(snakemake.input.costs, index_col=0),
+            snakemake.config.get("calibration", {}),
         )
 
     rename_clashing_vintages(n, snakemake.config["scenario"]["planning_horizons"])
@@ -579,6 +613,7 @@ if __name__ == "__main__":
 
     if snakemake.config["existing_capacities"].get("retire_existing", True):
         remove_retired_assets(n, year)
+    remove_not_yet_built(n, year)
 
     # the first planning horizon of the electricity-only workflow has no previous network
     network_p = snakemake.input.get("network_p")
@@ -604,4 +639,3 @@ if __name__ == "__main__":
         # targets of the solve-time calibration constraints set in prepare_network
         n.meta["calibration"] = calibration_meta
     n.export_to_netcdf(snakemake.output[0])
-    remove_not_yet_built(n, year)

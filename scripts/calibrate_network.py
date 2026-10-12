@@ -109,7 +109,7 @@ GROUPS = {
 }
 VRE_GROUPS = ["wind", "solar"]
 
-# generator carrier -> fuel row of the cost table
+# generator carrier -> fuel row of the cost table; extended by `calibration.fuel_map`
 FUELS = {
     "coal": "coal",
     "lignite": "lignite",
@@ -119,6 +119,11 @@ FUELS = {
     "nuclear": "uranium",
     "biomass": "biomass",
 }
+
+
+def fuel_map(config):
+    """Carrier -> fuel of the price table: the defaults plus ``calibration.fuel_map``."""
+    return {**FUELS, **(config.get("fuel_map") or {})}
 
 
 def _read(path, index=None):
@@ -186,9 +191,18 @@ def _scale_hydro_capacity(n, c, target):
     logger.info(f"capacity {c} hydro: {now/1e3:.2f} -> {target/1e3:.2f} GW")
 
 
-def calibrate_capacity(n, table, costs):
-    """Scale the installed capacity per (country, fuel group) to the table."""
+def calibrate_capacity(n, table, costs, reference_year=None):
+    """
+    Scale the installed capacity per (country, fuel group) to the table.
+
+    Generators with a build year after ``reference_year`` (plants under construction
+    kept by ``powerplants_filter`` for a myopic run) are not part of the reference
+    year's fleet and are left alone.
+    """
     countries = sorted(_country_of(n, "Generator").dropna().unique())
+    future = n.generators.index[n.generators.build_year > (reference_year or np.inf)]
+    if len(future):
+        logger.info(f"capacity: {len(future)} generators built after {reference_year} left out of the calibration")
     for c in countries:
         for group, (carriers, default) in GROUPS.items():
             target = _lookup(table, (c, group), "gw")
@@ -200,7 +214,7 @@ def calibrate_capacity(n, table, costs):
                 continue
             g = n.generators
             country = _country_of(n, "Generator")
-            idx = g.index[(country == c) & g.carrier.isin(carriers)]
+            idx = g.index[(country == c) & g.carrier.isin(carriers)].difference(future)
             now = g.loc[idx, "p_nom"].sum()
             if target <= 0:
                 if now > 0:
@@ -218,7 +232,7 @@ def calibrate_capacity(n, table, costs):
                 continue
             else:
                 bus = _largest_load_bus(n, c)
-                name = f"{bus} {default}"
+                name = f"{bus} {default} statistics"  # distinct from an extendable "{bus} {default}"
                 n.add(
                     "Generator",
                     name,
@@ -323,16 +337,17 @@ def calibrate_hydro(n, table):
         logger.info(f"PHS: max_hours 0 -> 6 h for {len(phs)} units")
 
 
-def calibrate_prices(n, costs, fuel_prices=None, co2_prices=None):
-    """Recompute marginal costs from per-country fuel and CO2 prices."""
+def calibrate_prices(n, costs, fuel_prices=None, co2_prices=None, fuels=None):
+    """Recompute marginal costs from per-country fuel and CO2 prices (``fuels``: carrier -> fuel, default FUELS)."""
+    fuels = FUELS if fuels is None else fuels
     country = _country_of(n, "Generator")
     g = n.generators
     emissions = n.carriers.co2_emissions.reindex(g.carrier).fillna(0.0).values
     for i, (name, row) in enumerate(g.iterrows()):
         c = country[name]
-        if row.carrier not in FUELS:
+        if row.carrier not in fuels:
             continue
-        fuel = FUELS[row.carrier]
+        fuel = fuels[row.carrier]
         price = costs.at[row.carrier, "fuel"] if "fuel" in costs else 0.0
         if fuel_prices is not None:
             p = _lookup(fuel_prices, (c, fuel), "price")
@@ -348,7 +363,7 @@ def calibrate_prices(n, costs, fuel_prices=None, co2_prices=None):
         n.generators.at[name, "marginal_cost"] = vom + (price + co2 * emissions[i]) / eff
     summary = (
         n.generators.assign(country=country)
-        .query("carrier in @FUELS")
+        .query("carrier in @fuels")
         .groupby(["country", "carrier"])
         .marginal_cost.mean()
         .unstack()
@@ -358,10 +373,14 @@ def calibrate_prices(n, costs, fuel_prices=None, co2_prices=None):
 
 
 def calibrate_envelope(n, table):
-    """Static p_min_pu / p_max_pu / efficiency per (country, carrier) for generators without a profile."""
+    """
+    Static p_min_pu / p_max_pu / efficiency per (country, carrier) for existing generators without a profile.
+
+    Extendable generators keep their own availability (new builds are not the calibrated fleet).
+    """
     country = _country_of(n, "Generator")
     g = n.generators
-    profiled = g.index.isin(n.generators_t.p_max_pu.columns)
+    profiled = g.index.isin(n.generators_t.p_max_pu.columns) | g.p_nom_extendable.values
     for name in g.index[~profiled]:
         key = (country[name], g.at[name, "carrier"])
         for attr in ["p_min_pu", "p_max_pu", "efficiency"]:
@@ -625,7 +644,7 @@ def fix_capacities(n):
     attach_isolated_buses(n)
 
 
-def calibrate_horizon(n, inputs, costs=None):
+def calibrate_horizon(n, inputs, costs=None, config=None):
     """
     Apply the tables of one planning horizon in a myopic run.
 
@@ -642,6 +661,8 @@ def calibrate_horizon(n, inputs, costs=None):
         table name (``demand``, ``fuel_prices``, ``co2_prices``) -> path
     costs : pd.DataFrame
         cost table, needed for the price tables
+    config : dict
+        the ``calibration`` config block (``fuel_map``)
     """
     if "demand" in inputs:
         calibrate_demand(n, _read(inputs["demand"], "country"))
@@ -651,6 +672,7 @@ def calibrate_horizon(n, inputs, costs=None):
             costs,
             _read(inputs["fuel_prices"], ["country", "fuel"]) if "fuel_prices" in inputs else None,
             _read(inputs["co2_prices"], "country") if "co2_prices" in inputs else None,
+            fuel_map(config or {}),
         )
 
 
@@ -678,7 +700,9 @@ def calibrate(n, costs, config, inputs):
     if "demand" in inputs:
         calibrate_demand(n, _read(inputs["demand"], "country"))
     if "capacity" in inputs:
-        calibrate_capacity(n, _read(inputs["capacity"], ["country", "group"]), costs)
+        calibrate_capacity(
+            n, _read(inputs["capacity"], ["country", "group"]), costs, config.get("reference_year")
+        )
     if "hydro" in inputs:
         calibrate_hydro(n, _read(inputs["hydro"], "country"))
     if "generation" in inputs:
@@ -692,6 +716,7 @@ def calibrate(n, costs, config, inputs):
             costs,
             _read(inputs["fuel_prices"], ["country", "fuel"]) if "fuel_prices" in inputs else None,
             _read(inputs["co2_prices"], "country") if "co2_prices" in inputs else None,
+            fuel_map(config),
         )
     if config.get("brownfield_only", False):
         fix_capacities(n)

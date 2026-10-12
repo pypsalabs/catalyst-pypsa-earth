@@ -1,6 +1,8 @@
 calibration:
   enable: false          # apply the tables below to the clustered network in prepare_network (scripts/calibrate_network.py)
   brownfield_only: false # true: freeze every generator and drop the extendable stores -> pure dispatch of the calibrated fleet (lines follow `ll`)
+  reference_year: null   # year of the tables; generators with a later build year (plants under construction) are left out of the capacity calibration
+  fuel_map: {}           # generator carrier -> fuel of `fuel_prices` in addition to the defaults (coal, lignite, CCGT/OCGT -> gas, oil, nuclear -> uranium, biomass)
   efficiency_spread: 0.  # > 0: split every fuel-burning generator into `tranches` parts with efficiencies x(1-spread)..x(1+spread)
   tranches: 3
   net_import_tolerance: 0.25 # half-width of the annual net-import band, relative to the target (floor 1 TWh)
