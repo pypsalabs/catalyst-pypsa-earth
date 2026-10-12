@@ -285,6 +285,10 @@ def update_capital_costs(
         )
 
 
+def remove_not_yet_built(n: pypsa.Network, year: int) -> None:
+    """
+    Removes existing assets whose build year is after the planning horizon.
+
 def add_brownfield(
     n: pypsa.Network, n_p: pypsa.Network, year: int, sector_coupled: bool = True
 ) -> None:
@@ -600,3 +604,4 @@ if __name__ == "__main__":
         # targets of the solve-time calibration constraints set in prepare_network
         n.meta["calibration"] = calibration_meta
     n.export_to_netcdf(snakemake.output[0])
+    remove_not_yet_built(n, year)
