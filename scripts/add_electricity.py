@@ -750,9 +750,10 @@ def attach_conventional_generators(
     renewable_carriers: set,
     conventional_config: list,
     conventional_inputs: dict,
+    extendable_buses: str = "existing",
 ) -> None:
     """
-    Add existing conventional generators to the network and extendable conventional generators at all buses.
+    Add existing conventional generators to the network and extendable conventional generators.
 
     Parameters
     ----------
@@ -772,6 +773,10 @@ def attach_conventional_generators(
         List of conventional configuration settings.
     conventional_inputs : dict
         Dictionary of conventional input parameters.
+    extendable_buses : str
+        Where the extendable conventional generators are added (``electricity:
+        extendable_carriers_buses``): ``existing`` at the buses with an existing
+        plant of the carrier, ``all`` at every AC bus.
 
     Returns
     -------
@@ -820,8 +825,17 @@ def attach_conventional_generators(
     )
 
     if extendable_conventional:
+        if extendable_buses == "all":
+            all_buses = n.buses.index[n.buses.carrier == "AC"]
+        elif extendable_buses != "existing":
+            raise ValueError(
+                f"electricity: extendable_carriers_buses must be 'existing' or 'all', not '{extendable_buses}'"
+            )
         for carrier in extendable_conventional:
-            carrier_buses = ppl[ppl.carrier == carrier]["bus"].unique()
+            if extendable_buses == "all":
+                carrier_buses = all_buses
+            else:
+                carrier_buses = ppl[ppl.carrier == carrier]["bus"].unique()
             n.madd(
                 "Generator",
                 carrier_buses,
@@ -835,7 +849,14 @@ def attach_conventional_generators(
                 lifetime=costs.at[carrier, "lifetime"],
             )
 
-        logger.info(f"Added extendable {extendable_conventional} generators.")
+        logger.info(
+            f"Added extendable {extendable_conventional} generators at "
+            + (
+                "every AC bus."
+                if extendable_buses == "all"
+                else "buses with existing plants."
+            )
+        )
     else:
         logger.info("No extendable conventional generators configured.")
 
@@ -870,7 +891,7 @@ def apply_nuclear_p_max_pu(n, nuclear_p_max_pu):
 
     factors = nuclear_p_max_pu.set_index("country")["factor"].div(100.0)
 
-    gens = n.generators[n.generators.carrier.str.startswith("nuclear", na=False)]
+    gens = n.generators[n.generators.carrier == "nuclear"]
     if gens.empty:
         logger.info("No nuclear generators found: skipping nuclear p_max_pu limits.")
         return
@@ -1331,6 +1352,7 @@ if __name__ == "__main__":
         renewable_carriers,
         snakemake.params.conventional,
         conventional_inputs,
+        snakemake.params.electricity.get("extendable_carriers_buses", "existing"),
     )
     attach_wind_and_solar(
         n,

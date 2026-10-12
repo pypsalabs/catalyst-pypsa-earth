@@ -18,6 +18,8 @@ This part of documentation collects descriptive release notes to capture the mai
 
 * New option ``costs: overrides``: a CSV in the technology-data format whose rows replace or add to the retrieved cost table (``process_cost_data``), e.g. for technologies that technology-data does not cover. Storage units defined through ``max_hours`` now carry the lifetime of their store, and the emissions of a new carrier are taken from the cost table row of the carrier itself before falling back to its base technology.
 
+* New option ``electricity: extendable_carriers_buses``: with ``all`` the extendable conventional carriers of ``extendable_carriers: Generator`` are added at every AC bus instead of only where a plant of that carrier exists. The country-level nuclear availability factors now apply to the carrier ``nuclear`` only.
+
 * New option ``existing_capacities: dispatch_only_horizons``: planning horizons of a myopic run that are solved without expansion (every extendable capacity fixed at its lower bound), for a base year that validates the existing system before the expansion starts.
 
 **Minor Changes and bug-fixing**

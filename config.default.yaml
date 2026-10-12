@@ -206,6 +206,7 @@ electricity:
     Link: [] # H2 pipeline
 
   conventional_carriers: [nuclear, oil, OCGT, CCGT, coal, lignite, geothermal, biomass]
+  extendable_carriers_buses: existing # where extendable conventional carriers are added: "existing" at buses with an existing plant of the carrier, "all" at every AC bus
   renewable_carriers: [solar, onwind, offwind-ac, offwind-dc, hydro]
 
   max_hours: # Storage duration [h]: fill time at max power for extendable battery/H2 storage
