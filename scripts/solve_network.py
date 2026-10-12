@@ -77,6 +77,7 @@ Details (and errors introduced through this heuristic) are discussed in the pape
     for all ``scenario`` s in the configuration file
     the rule :mod:`solve_network`.
 """
+
 import logging
 import os
 import re
@@ -673,6 +674,23 @@ def _add_land_use_constraint(n):
             gen_location[new_i].map(existing).fillna(0.0)
         )
 
+    # site-specific supply curves (``supply_curves``): several extendable generators per
+    # location and carrier, one per tranche, each netted against what its own tranche
+    # built in earlier horizons (same name without the year tags)
+    supply_curves = list((n.meta or {}).get("supply_curves", {}) or {})
+    if supply_curves:
+        # generator names without their vintage suffix ("-<grouping year>")
+        stem = n.generators.index.to_series().str.replace(r"(-\d{4})+$", "", regex=True)
+        for carrier in supply_curves:
+            is_carrier = n.generators.carrier == carrier
+            existing = (
+                n.generators.loc[is_carrier & ~extendable, "p_nom"].groupby(stem).sum()
+            )
+            new_i = n.generators.index[is_carrier & extendable]
+            n.generators.loc[new_i, "p_nom_max"] -= (
+                stem[new_i].map(existing).fillna(0.0)
+            )
+
     n.generators.p_nom_max.clip(lower=0, inplace=True)
 
     # Where land use constraint reduces p_nom_max below p_nom / p_nom_min,
@@ -1138,7 +1156,10 @@ def extra_functionality(n, snapshots):
         from calibrate_network import add_energy_band_constraints
 
         add_energy_band_constraints(
-            n, snapshots, calibration["energy_bands"], calibration.get("energy_band_penalty")
+            n,
+            snapshots,
+            calibration["energy_bands"],
+            calibration.get("energy_band_penalty"),
         )
 
     if snakemake.config["sector"]["chp"]:

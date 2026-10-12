@@ -530,6 +530,16 @@ Vintage grouping and thresholds for brownfield power and heating capacities in `
 
 {{ read_csv('configtables/existing_capacities.csv') }}
 
+### supply_curves
+
+Site-specific technologies whose potential and cost depend on the location (e.g. enhanced geothermal): a per-cell table is binned into a few tranches per cluster region by ``build_supply_curve`` and attached as extendable generators in ``add_extra_components``, with an hourly profile from the cutout's air temperature where the output depends on it.
+
+```yaml
+--8<-- "configtables/snippets/supply_curves.yaml"
+```
+
+{{ read_csv('configtables/supply_curves.csv') }}
+
 ### sector
 
 Specifies the options for sector coupling, i.e. the integration of the electricity system with other sectors such as heating and transport.

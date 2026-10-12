@@ -38,11 +38,13 @@ The rule :mod:`add_extra_components` attaches additional extendable components t
 
 - ``Stores`` of carrier 'H2' and/or 'battery' in combination with ``Links``. If this option is chosen, the script adds extra buses with corresponding carrier where energy ``Stores`` are attached and which are connected to the corresponding power buses via two links, one each for charging and discharging. This leads to three investment variables for the energy capacity, charging and discharging capacity of the storage unit.
 """
+
 import os
 
 import numpy as np
 import pandas as pd
 import pypsa
+import xarray as xr
 from _helpers import (
     configure_logging,
     create_logger,
@@ -50,6 +52,7 @@ from _helpers import (
     set_length_based_efficiency,
 )
 from add_electricity import add_nice_carrier_names
+from process_cost_data import annuity
 
 idx = pd.IndexSlice
 
@@ -325,6 +328,88 @@ def attach_advance_csp(
     )
 
 
+def attach_supply_curves(
+    n: pypsa.Network,
+    costs: pd.DataFrame,
+    ds: xr.Dataset,
+    carrier: str,
+    Nyears: float = 1.0,
+) -> None:
+    """
+    Attach the tranches of a site-specific supply curve as extendable generators.
+
+    One generator ``"<bus> <carrier> t<k>"`` per bus and tranche of the dataset
+    built by ``build_supply_curve`` (``supply_curves`` config): its potential is
+    the tranche's capacity, its availability the tranche's hourly profile and its
+    capital cost the annuity of the tranche's investment plus its fixed O&M. The
+    investment per cost component is kept on the generator (columns
+    ``capex_<component>``) so that ``add_brownfield`` can move it to the costs of
+    a later planning horizon.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The PyPSA network to attach the generators to.
+    costs : pd.DataFrame
+        The cost table; the row ``carrier`` gives marginal cost, lifetime, discount rate and emissions.
+    ds : xr.Dataset
+        The supply curve dataset (dimensions bus, tranche; ``p_nom_max``, ``capex_*``, ``fom``, ``lifetime``, ``profile``).
+    carrier : str
+        The carrier of the generators.
+    Nyears : float
+        Share of a year represented by the snapshots.
+    """
+    static = [v for v in ds.data_vars if "time" not in ds[v].dims]
+    df = ds[static].to_dataframe().dropna(subset=["p_nom_max"])
+    df = df[df.p_nom_max > 0]
+    if df.empty:
+        logger.info(f"No {carrier} potential in any region: no generators added.")
+        return
+    components = [c for c in ds.attrs.get("components", [])]
+    names = [f"{bus} {carrier} t{int(k)}" for bus, k in df.index]
+    rate = costs.at[carrier, "discount rate"] if "discount rate" in costs else 0.07
+    capital_cost = (
+        Nyears
+        * 1e3
+        * (df.capex.values * annuity(df.lifetime.values, rate) + df.fom.values)
+    )
+    profile = pd.DataFrame(
+        {
+            name: ds.profile.sel(bus=bus, tranche=k).values
+            for name, (bus, k) in zip(names, df.index)
+        },
+        index=pd.DatetimeIndex(ds.time.values),
+    ).reindex(n.snapshots)
+    if carrier not in n.carriers.index:
+        n.add(
+            "Carrier",
+            carrier,
+            co2_emissions=(
+                float(costs.at[carrier, "co2_emissions"])
+                if carrier in costs.index
+                else 0.0
+            ),
+        )
+    n.madd(
+        "Generator",
+        names,
+        bus=df.index.get_level_values("bus"),
+        carrier=carrier,
+        p_nom_extendable=True,
+        p_nom_max=df.p_nom_max.values,
+        p_max_pu=profile,
+        capital_cost=capital_cost,
+        marginal_cost=costs.at[carrier, "marginal_cost"],
+        lifetime=costs.at[carrier, "lifetime"],
+        efficiency=1.0,
+        **{f"capex_{c}": df[f"capex_{c}"].values for c in components},
+    )
+    logger.info(
+        f"Added {len(names)} {carrier} supply-curve generators, potential by bus [GW]:\n"
+        + df.p_nom_max.groupby(level="bus").sum().div(1e3).round(2).to_string()
+    )
+
+
 def attach_hydrogen_pipelines(
     n: pypsa.Network,
     costs: pd.DataFrame,
@@ -430,6 +515,15 @@ if __name__ == "__main__":
         attach_advance_csp(n, costs)
 
     attach_hydrogen_pipelines(n, costs, electricity, transmission_efficiency)
+
+    for tech in snakemake.params.get("supply_curves", {}) or {}:
+        attach_supply_curves(
+            n,
+            costs,
+            xr.open_dataset(snakemake.input[f"supply_curve_{tech}"]),
+            tech,
+            Nyears,
+        )
 
     add_nice_carrier_names(n, config=snakemake.config)
 
