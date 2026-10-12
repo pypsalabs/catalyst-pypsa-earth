@@ -105,7 +105,11 @@ def _add_missing_carriers_from_costs(n, costs, carriers):
     emissions_cols = (
         costs.columns.to_series().loc[lambda s: s.str.endswith("_emissions")].values
     )
-    suptechs = missing_carriers.str.split("-").str[0]
+    # the cost table row of the carrier itself, else the one of its base technology
+    # (e.g. offwind-ac -> offwind)
+    suptechs = pd.Index(
+        [c if c in costs.index else c.split("-")[0] for c in missing_carriers]
+    )
     emissions = costs.loc[suptechs, emissions_cols].fillna(0.0)
     emissions.index = missing_carriers
     n.import_components_from_dataframe(emissions, "Carrier")

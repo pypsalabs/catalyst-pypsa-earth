@@ -16,6 +16,8 @@ This part of documentation collects descriptive release notes to capture the mai
 
 * Options that take a table of statistics are switches; their rules read the table from the per-run directory ``resources/<run>/statistics/`` (new rule ``copy_statistics`` fills it from ``data/statistics/``), so that no option carries a file path.
 
+* New option ``costs: overrides``: a CSV in the technology-data format whose rows replace or add to the retrieved cost table (``process_cost_data``), e.g. for technologies that technology-data does not cover. Storage units defined through ``max_hours`` now carry the lifetime of their store, and the emissions of a new carrier are taken from the cost table row of the carrier itself before falling back to its base technology.
+
 * New option ``existing_capacities: dispatch_only_horizons``: planning horizons of a myopic run that are solved without expansion (every extendable capacity fixed at its lower bound), for a base year that validates the existing system before the expansion starts.
 
 **Minor Changes and bug-fixing**
