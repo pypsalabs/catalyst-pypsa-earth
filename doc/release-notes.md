@@ -20,6 +20,8 @@ This part of documentation collects descriptive release notes to capture the mai
 
 * New option ``electricity: extendable_carriers_buses``: with ``all`` the extendable conventional carriers of ``extendable_carriers: Generator`` are added at every AC bus instead of only where a plant of that carrier exists. The country-level nuclear availability factors now apply to the carrier ``nuclear`` only.
 
+* Myopic runs leave out existing assets whose build year is after the planning horizon (``add_brownfield``), so that power plants under construction, kept by ``powerplants_filter`` with their planned commissioning year, enter the model in the first horizon on or after it.
+
 * New option ``existing_capacities: dispatch_only_horizons``: planning horizons of a myopic run that are solved without expansion (every extendable capacity fixed at its lower bound), for a base year that validates the existing system before the expansion starts.
 
 **Minor Changes and bug-fixing**
