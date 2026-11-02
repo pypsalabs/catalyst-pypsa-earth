@@ -952,6 +952,9 @@ def clean_data(
     if os.path.getsize(input_files["lines"]) > 0:
         # Load raw data lines
         df_lines = load_network_data("lines", data_options)
+        if data_options.get("drop_duplicate_ids", False):
+            # a cross-border way arrives once per country extract
+            df_lines = df_lines.drop_duplicates(subset="id")
 
         # prepare lines dataframe and data types
         df_lines = prepare_lines_df(df_lines)
@@ -968,6 +971,8 @@ def clean_data(
         logger.info("Add OSM cables to data")
         # Load raw data lines
         df_cables = load_network_data("cables", data_options)
+        if data_options.get("drop_duplicate_ids", False):
+            df_cables = df_cables.drop_duplicates(subset="id")
 
         # prepare cables dataframe and data types
         df_cables = prepare_lines_df(df_cables)
