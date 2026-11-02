@@ -1094,6 +1094,35 @@ def cap_must_run(n, share):
             )
 
 
+def weight_by_capacity(n, carriers):
+    """
+    Weight the profiles of wind and solar generators by their installed capacity
+    when buses are merged (``renewable: <tech>: cluster_weight: capacity``).
+
+    ``simplify_network`` and ``cluster_network`` average ``p_max_pu`` with the
+    generator ``weight`` (``clustering: aggregation_strategies: generators:
+    p_max_pu: weighted_average``), which is the technical potential of the bus from
+    ``build_renewable_profiles``. The existing fleet stands at a few of those buses,
+    so a potential-weighted profile does not describe it. With this option the
+    weight is the installed capacity, and the potential (scaled to at most 1e-3 MW)
+    only decides between buses without any: a cluster with existing capacity gets
+    the capacity factor of its fleet, one without keeps the potential-weighted
+    profile.
+    """
+    for carrier in carriers:
+        i = n.generators.index[n.generators.carrier == carrier]
+        if i.empty:
+            continue
+        potential = n.generators.loc[i, "weight"].astype(float).fillna(0.0)
+        if potential.max() > 0:
+            potential = potential / potential.max()
+        n.generators.loc[i, "weight"] = n.generators.loc[i, "p_nom"] + 1e-3 * potential
+        logger.info(
+            f"cluster weight of {carrier}: installed capacity "
+            f"({(n.generators.loc[i, 'p_nom'] > 0).sum()} of {len(i)} buses)"
+        )
+
+
 def attach_hydro(
     n: pypsa.Network,
     costs: pd.DataFrame,
@@ -1542,6 +1571,15 @@ if __name__ == "__main__":
             cf_targets["groups"],
             cf_targets.get("clip", (0.6, 1.4)),
         )
+    weight_by_capacity(
+        n,
+        [
+            t
+            for t in renewable_carriers
+            if (snakemake.params.renewable.get(t) or {}).get("cluster_weight")
+            == "capacity"
+        ],
+    )
     attach_hydro(
         n, costs, ppl, snakemake.params.renewable["hydro"]["hydro_min_inflow_pu"]
     )
