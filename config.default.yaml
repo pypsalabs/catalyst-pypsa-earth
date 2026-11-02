@@ -281,6 +281,11 @@ links:
   p_nom_max: .inf
   p_nom_max_min: -.inf
   under_construction: "zero" # 'zero': set capacity to zero, 'remove': remove, 'keep': with full capacity
+  # base_network: optional csv (country, voltage_kv, p_nom_mw; country "*" = default) of the rated capacity of one HVDC
+  # line (a bipole) by country and pole voltage: the country's row within 10 % of the line voltage, else the nearest
+  # "*" row; converters take the summed rating of the DC links at their DC bus. false: p_nom = v_nom x i_nom of the
+  # lines: dc_types cable type (1.31 GW at 800 kV)
+  dc_ratings: false
 
 transformers:
   x: 0.1

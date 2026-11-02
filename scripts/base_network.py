@@ -55,6 +55,7 @@ Outputs
 Description
 -----------
 """
+
 import os
 
 import geopandas as gpd
@@ -655,7 +656,9 @@ def _set_lines_s_nom_from_linetypes(n: "pypsa.Network") -> None:
     n : pypsa.Network
         Network whose ``lines`` component is updated in-place.
     """
-    if n.lines.empty:  # no line above threshold_voltage (see the under_construction guard below)
+    if (
+        n.lines.empty
+    ):  # no line above threshold_voltage (see the under_construction guard below)
         return
     # Info: n.line_types is a lineregister from pypsa/pandapowers
     n.lines["s_nom"] = (
@@ -690,6 +693,100 @@ def _remove_dangling_branches(
     return pd.DataFrame(
         branches.loc[branches.bus0.isin(buses.index) & branches.bus1.isin(buses.index)]
     )
+
+
+def _get_dc_rating(ratings: pd.DataFrame, country: str, voltage: float) -> float:
+    """Return the rated capacity [MW] of one HVDC line of a country and pole voltage.
+
+    Uses the country's row closest in voltage when it lies within 10 % of
+    *voltage*, otherwise the closest default row (country ``*``).
+
+    Parameters
+    ----------
+    ratings : pd.DataFrame
+        Table with columns ``country``, ``voltage_kv`` and ``p_nom_mw``.
+    country : str
+        Country code of the line (that of its ``bus0``).
+    voltage : float
+        Pole voltage of the line [kV].
+
+    Returns
+    -------
+    float
+        Rated capacity [MW]; NaN if neither a country nor a default row exists.
+    """
+    for rows, tolerance in (
+        (ratings[ratings.country == country], 0.1 * voltage),
+        (ratings[ratings.country == "*"], np.inf),
+    ):
+        if rows.empty:
+            continue
+        distance = (rows.voltage_kv - voltage).abs()
+        if distance.min() <= tolerance:
+            return float(rows.p_nom_mw[distance.idxmin()])
+    return np.nan
+
+
+def _set_dc_ratings(n: "pypsa.Network", fn: str) -> None:
+    """Set the capacity of HVDC links and converters from rated capacities.
+
+    Each DC link (one OSM HVDC line) is taken as one bipole and gets the
+    rating of its country and voltage (``links: dc_ratings``) instead of
+    ``v_nom`` times the current of a ``lines: dc_types`` cable type. A
+    converter gets the summed rating of the DC links at its DC bus, so that it
+    does not limit them. Links without a matching row keep their capacity.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        Network whose ``links`` component is updated in-place.
+    fn : str
+        Path of a csv with columns ``country``, ``voltage_kv`` and ``p_nom_mw``
+        (country ``*`` = default for any country).
+    """
+    ratings = pd.read_csv(fn, comment="#")
+    ratings["country"] = ratings["country"].astype(str)
+    dc = n.links.index[n.links.carrier == "DC"]
+    if dc.empty:
+        return
+    bus0 = n.links.loc[dc, "bus0"]
+    rating = pd.Series(
+        [
+            _get_dc_rating(ratings, c, v)
+            for c, v in zip(
+                bus0.map(n.buses.country), bus0.map(n.buses.v_nom).astype(float)
+            )
+        ],
+        index=dc,
+    )
+    n.links.loc[dc, "p_nom"] = rating.fillna(n.links.loc[dc, "p_nom"])
+    logger.info(
+        f"HVDC ratings from {fn}: {len(dc)} links, "
+        f"{n.links.loc[dc, 'p_nom'].sum() / 1e3:.1f} GW in total"
+    )
+    _set_converter_ratings(n)
+
+
+def _set_converter_ratings(n: "pypsa.Network") -> None:
+    """Give each converter the summed capacity of the DC links at its DC bus."""
+    dc = n.links.index[n.links.carrier == "DC"]
+    at_bus = (
+        pd.concat(
+            [
+                n.links.loc[dc, ["bus0", "p_nom"]].rename(columns={"bus0": "bus"}),
+                n.links.loc[dc, ["bus1", "p_nom"]].rename(columns={"bus1": "bus"}),
+            ]
+        )
+        .groupby("bus")
+        .p_nom.sum()
+    )
+    converters = n.links.index[n.links.carrier == "B2B"]
+    for c in converters:
+        buses = n.links.loc[c, ["bus0", "bus1"]]
+        dc_side = buses[buses.map(n.buses.carrier) == "DC"]
+        p_nom = at_bus.reindex(dc_side.values).sum()
+        if p_nom > 0:
+            n.links.loc[c, "p_nom"] = p_nom
 
 
 def _set_countries_and_substations(
@@ -894,6 +991,9 @@ def base_network(
     _set_lines_s_nom_from_linetypes(n)
 
     _set_countries_and_substations(inputs, base_network_config, countries_config, n)
+
+    if links_config.get("dc_ratings"):
+        _set_dc_ratings(n, links_config["dc_ratings"])
 
     _set_dc_underwater_fraction(n.lines, inputs.offshore_shapes)
     _set_dc_underwater_fraction(n.links, inputs.offshore_shapes)

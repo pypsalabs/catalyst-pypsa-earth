@@ -3,3 +3,4 @@ p_max_pu,--,"Value in [0.,1.]",Correction factor for link capacities ``p_nom``.
 p_nom_max,MW,float,Global upper limit for the maximum capacity of each extendable DC link.
 p_nom_max_min,MW,float,Global lower limit for the maximum capacity of each extendable DC link.
 under_construction,--,"One of {'zero', 'remove', 'keep'}","Specifies how to handle lines which are currently under construction. 'zero': set capacity to zero; 'remove': remove completely, 'keep': keep with full capacity."
+dc_ratings,--,"false or path to a csv","Rated capacity of one HVDC line (a bipole) per country and pole voltage (columns ``country``, ``voltage_kv``, ``p_nom_mw``; country ``*`` = default). A line takes its country's row within 10 % of its voltage, otherwise the nearest default row; converters take the summed rating of the DC links at their DC bus. ``false``: ``p_nom`` = ``v_nom`` times the current of the ``lines: dc_types`` cable type."
