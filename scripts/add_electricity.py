@@ -685,6 +685,20 @@ def attach_wind_and_solar(
             if not targets.empty:
                 buses_country = n.buses.loc[ds.indexes["bus"], "country"]
                 existing_by_country = caps_existing.groupby(buses_country).sum()
+                if estimate_cfg.get("scale_down", False):
+                    # the statistics are the installed fleet: a plant list above them
+                    # (duplicates, plants not yet in operation) is scaled down to them
+                    over = (
+                        existing_by_country > targets.reindex(existing_by_country.index)
+                    ) & (targets.reindex(existing_by_country.index) > 0)
+                    factor = (targets / existing_by_country).where(over).dropna()
+                    for country, f in factor.items():
+                        buses_c = buses_country.index[buses_country == country]
+                        caps_existing.loc[buses_c] *= f
+                        logger.info(
+                            f"{carrier} {country}: plant list scaled to the statistics (x{f:.2f})"
+                        )
+                    existing_by_country = caps_existing.groupby(buses_country).sum()
                 gap_by_country = targets.sub(existing_by_country, fill_value=0.0).clip(
                     lower=0.0
                 )
