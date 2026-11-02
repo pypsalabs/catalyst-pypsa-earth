@@ -739,6 +739,7 @@ rule add_electricity:
         countries=config["countries"],
         output_currency=config["costs"]["output_currency"],
         fill_values=config["costs"]["fill_values"],
+        costs=config["costs"],
         conventional=config.get("conventional", {}),
         electricity=config["electricity"],
         alternative_clustering=config["clustering"]["alternative_clustering"],
@@ -768,6 +769,7 @@ rule add_electricity:
                     "efficiency.csv",
                     enabled(config["electricity"].get("powerplants_efficiency")),
                 ),
+                ("fuel_prices", "fuel_prices.csv", enabled(config["costs"].get("fuel_prices"))),
             ]
             if on
         },

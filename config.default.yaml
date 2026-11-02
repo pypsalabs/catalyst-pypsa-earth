@@ -565,6 +565,8 @@ supply_curves: {} # extendable generators whose potential and cost depend on the
 costs:
   year: 2030 # cost file selection, i.e. costs_2030.csv in this case; reference year for costs is always 2020
   technology_data_version: v0.13.2
+  fuel_prices: false # true: fuel prices of the conventional generators per country from statistics/fuel_prices.csv (country, fuel, price [output currency/MWh_th]; row "*" = default)
+  fuel_map: {} # generator carrier -> fuel of `fuel_prices` in addition to coal, lignite, CCGT/OCGT -> gas, oil, nuclear -> uranium, biomass
   overrides: false # true: the rows of statistics/cost_overrides_<year>.csv (technology-data format: technology, parameter, value, unit, source, further description, currency_year) replace or add to the cost table, e.g. for technologies not in technology-data
   discountrate: [0.071] #, 0.086, 0.111]
   country_specific_data: "" # (optional) Reference to the desired technology-data directory for techno-economic input data; Only "" and "US" supported, for other values check the technology-data output directory

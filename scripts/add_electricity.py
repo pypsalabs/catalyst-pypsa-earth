@@ -755,6 +755,40 @@ def attach_wind_and_solar(
             )
 
 
+# generator carrier -> fuel of the cost table (``costs: fuel_map`` extends it)
+FUEL_MAP = {
+    "coal": "coal",
+    "lignite": "lignite",
+    "CCGT": "gas",
+    "OCGT": "gas",
+    "oil": "oil",
+    "nuclear": "uranium",
+    "biomass": "biomass",
+}
+
+
+def fuel_price_lookup(fn, fuel_map, costs):
+    """
+    Vectorised fuel price (country, carrier) -> price per MWh_th: the country's price of
+    the carrier's fuel from the table ``fn`` (``costs: fuel_prices``; country, fuel,
+    price; row ``*`` = default), else the cost table's fuel price of the carrier.
+    """
+    fuels = dict(FUEL_MAP, **(fuel_map or {}))
+    lookup = read_country_table(fn, ["fuel"], "price") if fn else None
+    default = costs["fuel"] if "fuel" in costs else pd.Series(dtype=float)
+
+    def price(countries, carriers):
+        out = []
+        for c, k in zip(countries, carriers):
+            p = lookup(c, fuels[k]) if lookup is not None and k in fuels else np.nan
+            out.append(p if not np.isnan(p) else default.get(k, 0.0))
+        return pd.Series(
+            out, index=getattr(countries, "index", None), dtype=float
+        ).fillna(0.0)
+
+    return price
+
+
 def attach_conventional_generators(
     n: pypsa.Network,
     costs: pd.DataFrame,
@@ -765,6 +799,8 @@ def attach_conventional_generators(
     conventional_config: list,
     conventional_inputs: dict,
     extendable_buses: str = "existing",
+    fuel_prices: str = None,
+    fuel_map: dict = None,
 ) -> None:
     """
     Add existing conventional generators to the network and extendable conventional generators.
@@ -791,6 +827,10 @@ def attach_conventional_generators(
         Where the extendable conventional generators are added (``electricity:
         extendable_carriers_buses``): ``existing`` at the buses with an existing
         plant of the carrier, ``all`` at every AC bus.
+    fuel_prices : str
+        Optional table of fuel prices per country (``costs: fuel_prices``: country,
+        fuel, price in the output currency per MWh_th). The fuel of a carrier comes
+        from ``fuel_map`` (``costs: fuel_map``, default ``FUEL_MAP``).
 
     Returns
     -------
@@ -808,9 +848,13 @@ def attach_conventional_generators(
     )
     # plant efficiency (plant data or electricity.powerplants_efficiency), else the cost table's
     ppl["efficiency"] = ppl.efficiency.fillna(ppl.efficiency_r)
-    # marginal cost with the plant's efficiency: the cost table's value plus the change of the fuel term
-    ppl["marginal_cost"] = ppl.marginal_cost + ppl.fuel.fillna(0.0) * (
-        1 / ppl.efficiency - 1 / ppl.efficiency_r
+    # marginal cost with the plant's efficiency and the fuel price of its country:
+    # the cost table's value plus the change of the fuel term
+    fuel = fuel_price_lookup(fuel_prices, fuel_map, costs)
+    ppl["marginal_cost"] = (
+        ppl.marginal_cost
+        + fuel(ppl.country, ppl.carrier) / ppl.efficiency
+        - ppl.fuel.fillna(0.0) / ppl.efficiency_r
     )
 
     # Aggregate power plants by (bus, carrier, grouping_year)
@@ -855,6 +899,16 @@ def attach_conventional_generators(
                 carrier_buses = all_buses
             else:
                 carrier_buses = ppl[ppl.carrier == carrier]["bus"].unique()
+            eff = costs.at[carrier, "efficiency"]
+            countries = n.buses.loc[carrier_buses, "country"]
+            marginal_cost = (
+                costs.at[carrier, "marginal_cost"]
+                + (
+                    fuel(countries, pd.Series(carrier, index=countries.index))
+                    - (costs.at[carrier, "fuel"] if "fuel" in costs else 0.0)
+                )
+                / eff
+            )
             n.madd(
                 "Generator",
                 carrier_buses,
@@ -862,8 +916,10 @@ def attach_conventional_generators(
                 carrier=carrier,
                 bus=carrier_buses,
                 p_nom_extendable=True,
-                efficiency=costs.at[carrier, "efficiency"],
-                marginal_cost=costs.at[carrier, "marginal_cost"],
+                efficiency=eff,
+                marginal_cost=pd.Series(
+                    marginal_cost.values, index=carrier_buses + " " + carrier
+                ),
                 capital_cost=costs.at[carrier, "capital_cost"],
                 lifetime=costs.at[carrier, "lifetime"],
             )
@@ -1372,6 +1428,8 @@ if __name__ == "__main__":
         snakemake.params.conventional,
         conventional_inputs,
         snakemake.params.electricity.get("extendable_carriers_buses", "existing"),
+        snakemake.input.get("fuel_prices"),
+        snakemake.params.costs.get("fuel_map"),
     )
     attach_wind_and_solar(
         n,
