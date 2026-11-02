@@ -372,6 +372,11 @@ rule base_network:
             STATISTICS + "dc_ratings.csv",
             [],
         ),
+        dc_projects=branch(
+            enabled(config["links"].get("dc_projects")),
+            STATISTICS + "dc_projects.csv",
+            [],
+        ),
     output:
         "networks/" + RDIR + "base.nc",
     log:
