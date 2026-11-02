@@ -76,6 +76,7 @@ The rule :mod:`simplify_network` does up to four things:
 
 4. Optionally, if an integer were provided for the wildcard ``{simpl}`` (e.g. ``networks/elec_s500.nc``), the network is clustered to this number of clusters with the routines from the ``cluster_network`` rule with the function ``cluster_network.cluster(...)``. This step is usually skipped!
 """
+
 import os
 import sys
 from functools import reduce
@@ -535,8 +536,12 @@ def simplify_links(
                 p_max_pu = config_links.get("p_max_pu", 1.0)
                 lengths = n.links.loc[all_links, "length"]
                 i_links = [i for _, i in sum(dc_edges, []) if _ == "Link"]
-                length = sum(n.links.loc[i_links, "length"].mean() for l in dc_edges)
-                p_nom = min(n.links.loc[i_links, "p_nom"].sum() for l in dc_edges)
+                # series of parallel edge groups: lengths add up along the chain,
+                # parallel capacities add up and the weakest group limits it
+                groups = [[i for c, i in l if c == "Link"] for l in dc_edges]
+                groups = [g for g in groups if g]
+                length = sum(n.links.loc[g, "length"].mean() for g in groups)
+                p_nom = min(n.links.loc[g, "p_nom"].sum() for g in groups)
                 underwater_fraction = (
                     lengths * n.links.loc[all_links, "underwater_fraction"]
                 ).sum() / lengths.sum()
