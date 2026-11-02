@@ -652,6 +652,9 @@ def inputs_hydro(w):
             "powerplants": "resources/" + RDIR + "powerplants.csv",
             "hydrobasins": config["renewable"]["hydro"]["resource"]["hydrobasins"],
         }
+        normalization = config["renewable"]["hydro"].get("normalization") or {}
+        if normalization.get("method") == "custom":
+            HYDRO_PROFILES["hydro_statistics"] = STATISTICS + "hydro_generation.csv"
         return HYDRO_PROFILES
     else:
         return {}

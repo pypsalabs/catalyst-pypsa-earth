@@ -443,7 +443,9 @@ renewable:
     clip_min_inflow: 1.0
     extendable: true
     normalization:
-      method: irena # 'hydro_capacities' to rescale country hydro production by using hydro_capacities, 'eia' or 'irena' to rescale by eia or irena data, false for no rescaling
+      method: irena # 'hydro_capacities' to rescale country hydro production by using hydro_capacities, 'eia' or 'irena' to rescale by eia or irena data, 'custom' for statistics/hydro_generation.csv (country, twh[, year]), false for no rescaling
+      # distribute: capacity # (optional) give the plants of a country one capacity factor (each keeps its runoff time profile) instead of scaling the runoff uniformly; the statistic is then read as generation: run-of-river inflow is scaled until the part below capacity carries it and is clipped at capacity, reservoir inflow is divided by dispatch_efficiency
+      # dispatch_efficiency: 1.0 # (optional, with distribute: capacity) efficiency at which reservoirs turn inflow into electricity (the `hydro` efficiency of the cost table, 0.9 in technology-data)
       # use the weather year for weather-dominated variations (installed capacity is changing slowly)
       # the technology-year for policy-determined changes (installed capacity is changing quickly)
       year: 2023 # (optional) year of statistics used to rescale the runoff time series. When not provided, the cutout weather year is used
