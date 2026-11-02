@@ -66,6 +66,7 @@ import pypsa
 import scipy as sp
 import shapely.prepared
 import shapely.wkt
+from _dc_projects import assign_projects, missing_links, read_way_names, way_of_line
 from _helpers import configure_logging, create_logger, read_csv_nafix
 from shapely.ops import unary_union
 
@@ -789,6 +790,65 @@ def _set_converter_ratings(n: "pypsa.Network") -> None:
             n.links.loc[c, "p_nom"] = p_nom
 
 
+def _set_dc_projects(n: "pypsa.Network", options: dict, fp_osm_lines: str) -> None:
+    """Set the capacity of HVDC links from a table of projects (``links: dc_projects``).
+
+    See ``_dc_projects.py``: by OSM way name first, by terminals as the fallback.
+    Way names come from the raw OSM tables next to the base network files, through
+    the line ids of ``fp_osm_lines``. Links of a project entering service after
+    ``reference_year`` get zero capacity, as do links matching no project with
+    ``unmatched: zero``. With ``add_missing``, a project in service without a
+    route in the network becomes one link between the AC buses at its terminals.
+    Runs after ``_set_dc_ratings``, so that ``unmatched: keep`` leaves those ratings.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        Network whose ``links`` component is updated in-place.
+    options : dict
+        ``file``, and optionally ``reference_year``, ``unmatched``, ``add_missing``.
+    fp_osm_lines : str
+        Path of the line table of ``build_osm_network``, in the row order of
+        the links' index.
+    """
+    projects = pd.read_csv(options["file"], comment="#")
+    reference_year = options.get("reference_year", 2024)
+    dc = n.links.index[n.links.carrier == "DC"]
+    line_ids = pd.read_csv(fp_osm_lines, usecols=["line_id"], dtype=str).line_id
+    raw_dir = os.path.join(os.path.dirname(fp_osm_lines), "..", "osm", "raw")
+    names = read_way_names(raw_dir)
+    ways = line_ids.reindex(dc.astype(int)).map(way_of_line)
+    way_names = pd.Series(ways.map(names).values, index=dc)
+    p_nom, future, report = assign_projects(
+        n.links.loc[dc], n.buses, projects, reference_year, way_names
+    )
+    if options.get("unmatched", "keep") == "zero":
+        n.links.loc[dc, "p_nom"] = 0.0
+    n.links.loc[p_nom.index, "p_nom"] = p_nom
+    n.links.loc[future.index[future], "p_nom"] = 0.0
+    n.links.loc[n.links.carrier == "DC", "under_construction"] = False
+    if options.get("add_missing", False):
+        new = missing_links(report, projects, n.buses, reference_year)
+        for name, r in new.iterrows():
+            n.add(
+                "Link",
+                f"DC project {name}",
+                bus0=r.bus0,
+                bus1=r.bus1,
+                p_nom=r.p_nom,
+                length=r.length,
+                carrier="DC",
+                v_nom=r.v_nom,
+                p_min_pu=-1.0,
+            )
+    logger.info(
+        f"HVDC projects from {options['file']}: "
+        f"{report.status.value_counts().to_dict()}, "
+        f"{n.links.loc[n.links.carrier == 'DC', 'p_nom'].sum() / 1e3:.1f} GW in total"
+    )
+    _set_converter_ratings(n)
+
+
 def _set_countries_and_substations(
     inputs: object,
     base_network_config: dict,
@@ -995,8 +1055,13 @@ def base_network(
     if links_config.get("dc_ratings"):
         _set_dc_ratings(n, links_config["dc_ratings"])
 
+    if links_config.get("dc_projects"):
+        _set_dc_projects(n, links_config["dc_projects"], inputs.osm_lines)
+
     _set_dc_underwater_fraction(n.lines, inputs.offshore_shapes)
     _set_dc_underwater_fraction(n.links, inputs.offshore_shapes)
+    if links_config.get("dc_projects"):  # links added from the table have no geometry
+        n.links["underwater_fraction"] = n.links["underwater_fraction"].fillna(0.0)
 
     return n
 

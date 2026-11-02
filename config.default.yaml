@@ -316,6 +316,9 @@ links:
   # "*" row; converters take the summed rating of the DC links at their DC bus. false: p_nom = v_nom x i_nom of the
   # lines: dc_types cable type (1.31 GW at 800 kV)
   dc_ratings: false
+  # base_network: rate HVDC links per project instead of per line, matched by OSM way name, with terminal coordinates to pick the route (csv columns
+  # name, country1, country2, voltage_kv, p_nom_mw, year, length_km, x1, y1, x2, y2, osm_names). Options: file, reference_year, unmatched (keep or zero), add_missing
+  dc_projects: false
 
 transformers:
   x: 0.1
