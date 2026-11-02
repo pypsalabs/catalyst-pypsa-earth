@@ -10,6 +10,7 @@ import os
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyproj
 from _helpers import (
     configure_logging,
     create_logger,
@@ -544,7 +545,7 @@ def merge_stations_lines_by_station_id_and_voltage(
     return lines, buses
 
 
-def fix_overpassing_lines(lines, buses, distance_crs, tol=1):
+def fix_overpassing_lines(lines, buses, distance_crs, tol=1, geodesic_length=False):
     """
     Snap buses to lines that are within a certain tolerance. It does this by
     first buffering the buses by the tolerance distance, and then performing a
@@ -655,7 +656,12 @@ def fix_overpassing_lines(lines, buses, distance_crs, tol=1):
     # df_l = line_endings_to_bus_conversion(df_l)
 
     # update length
-    df_l["length"] = df_l.to_crs(distance_crs).geometry.length
+    if geodesic_length:
+        # distance_crs distorts lengths (EPSG:3857 by 1 / cos(latitude))
+        geod = pyproj.Geod(ellps="WGS84")
+        df_l["length"] = df_l.to_crs("EPSG:4326").geometry.map(geod.geometry_length)
+    else:
+        df_l["length"] = df_l.to_crs(distance_crs).geometry.length
 
     # return to original crs
     df_l = df_l.to_crs(lines.crs)
@@ -786,7 +792,13 @@ def built_network(
         tol = build_osm_network_config.get("overpassing_lines_tolerance", 1)
         logger.info("Stage 3/5: Avoid nodes overpassing lines: enabled with tolerance")
 
-        lines, buses = fix_overpassing_lines(lines, buses, distance_crs, tol=tol)
+        lines, buses = fix_overpassing_lines(
+            lines,
+            buses,
+            distance_crs,
+            tol=tol,
+            geodesic_length=build_osm_network_config.get("geodesic_length", False),
+        )
     else:
         logger.info("Stage 3/5: Avoid nodes overpassing lines: disabled")
 

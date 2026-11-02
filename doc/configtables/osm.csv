@@ -14,6 +14,7 @@ clean_osm_data,,,Options passed to the ``clean_osm_data`` rule.
 -- drop_duplicate_ids,bool,"{True, False}",True: a line or cable that appears in several country extracts is kept once.
 -- fix_indirect_circuits,bool,"{True, False}","True: a way with several voltages and one total number of cables gets circuits, not cables, per voltage (voltage=230000;230000, cables=6: 1 circuit per voltage, not 3)."
 build_osm_network,,,Options passed to the ``build_osm_network`` rule.
+-- geodesic_length,bool,"{True, False}",True: line lengths are measured on the ellipsoid instead of in ``distance_crs``. Only with ``split_overpassing_lines``.
 -- group_close_buses,bool,"{True, False}",True: close buses are merged and guarantee the voltage matching among line endings.
 -- group_tolerance_buses,m,,Tolerance in meters of the close buses to merge.
 -- split_overpassing_lines,bool,"{True, False}",True: lines overpassing buses are splitted and connected to the buses.
