@@ -600,6 +600,11 @@ rule build_demand_profiles:
             config["load_options"].get("fallback_source") == "demcast",
             "data/demand/forecasts_on_historical_period.parquet",
         ),
+        annual_totals=branch(
+            enabled(config["load_options"].get("annual_totals")),
+            STATISTICS + "demand.csv",
+            [],
+        ),
         #gadm_shapes="resources/" + RDIR + "shapes/MAR2.geojson",
         #using this line instead of the following will test updated gadm shapes for MA.
         #To use: downlaod file from the google drive and place it in resources/" + RDIR + "shapes/

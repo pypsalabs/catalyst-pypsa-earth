@@ -194,6 +194,7 @@ load_options:
   prediction_year: 2030 # Valid only if "gegis" used as a source
   scale: 1 # scales all load time-series, i.e. 2 = doubles load
   fallback_source: false # "demcast": countries without load in `source` (e.g. gegis has none for HK, PR, LA, BT) take the DemandCast series of weather_year
+  annual_totals: false # true: each country's load is scaled to the annual demand of statistics/demand.csv (country, demand_twh; row "*" = default) before it is distributed to the buses
 
 # Options that take a table of statistics are switches: the rules read the table from resources/<run>/statistics/
 # (file names in the comments below). Rule copy_statistics fills that directory from data/statistics/.
