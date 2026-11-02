@@ -115,11 +115,30 @@ def _add_missing_carriers_from_costs(n, costs, carriers):
     n.import_components_from_dataframe(emissions, "Carrier")
 
 
+def read_country_table(fn, keys, column):
+    """
+    Read a statistics table with a ``country`` column (ISO 3166-1 alpha-2) and further
+    key columns ``keys``; a row with country ``*`` is the default for countries without
+    an entry. Returns a function (country, *keys) -> value (NaN if neither exists).
+    """
+    table = pd.read_csv(fn, comment="#").set_index(["country", *keys])[column]
+
+    def lookup(country, *key):
+        for c in (country, "*"):
+            k = (c, *key) if key else c
+            if k in table.index:
+                return table.loc[k]
+        return np.nan
+
+    return lookup
+
+
 def load_powerplants(
     ppl_fn: str,
     costs: pd.DataFrame = None,
     fill_values: dict = None,
     grouping_years: list = None,
+    efficiency_fn: str = None,
 ) -> pd.DataFrame:
     """
     Load and preprocess powerplant matching data, fill missing datein/dateout, and assign grouping years.
@@ -133,6 +152,10 @@ def load_powerplants(
         Dictionary containing default values for lifetime.
     grouping_years : list
         List of years to group build years into.
+    efficiency_fn : str
+        Optional table (``electricity.powerplants_efficiency``: country, carrier,
+        efficiency) filling the efficiency of plants for which the plant data has
+        none; plants without either take the cost table's value later on.
 
     Returns
     -------
@@ -155,9 +178,22 @@ def load_powerplants(
         .powerplant.to_pypsa_names()
         .powerplant.convert_country_to_alpha2()
         .rename(columns=str.lower)
-        .drop(columns=["efficiency"])
         .replace({"carrier": carrier_dict})
     )
+    if "efficiency" not in ppl:
+        ppl["efficiency"] = np.nan
+    ppl["efficiency"] = pd.to_numeric(ppl["efficiency"], errors="coerce").where(
+        lambda e: e > 0
+    )
+    if efficiency_fn:
+        lookup = read_country_table(efficiency_fn, ["carrier"], "efficiency")
+        missing = ppl.efficiency.isna()
+        ppl.loc[missing, "efficiency"] = [
+            lookup(c, k) for c, k in zip(ppl.country[missing], ppl.carrier[missing])
+        ]
+        logger.info(
+            f"efficiency of {missing.sum() - ppl.efficiency.isna().sum()} plants from {efficiency_fn}"
+        )
     # drop powerplants with null capacity
     null_ppls = ppl[ppl.p_nom <= 0]
     if not null_ppls.empty:
@@ -359,16 +395,27 @@ def aggregate_ppl_by_bus_carrier_year(ppl: pd.DataFrame) -> pd.DataFrame:
         "max_hours": "mean",
     }
 
-    if "marginal_cost" in ppl.columns:
-        agg_dict["marginal_cost"] = "mean"
     if "capital_cost" in ppl.columns:
         agg_dict["capital_cost"] = "mean"
-    if "efficiency" in ppl.columns:
-        agg_dict["efficiency"] = "mean"
     if "country" in ppl.columns:
         agg_dict["country"] = "first"
 
     ppl_grouped = ppl.groupby(["bus", "carrier_gy"]).agg(agg_dict).reset_index()
+
+    # efficiency and marginal cost of a group: capacity-weighted means of its plants
+    for col in ["efficiency", "marginal_cost"]:
+        if col in ppl.columns:
+            w = ppl.p_nom.where(ppl[col].notna(), 0.0)
+            weighted = (
+                (ppl[col].fillna(0.0) * w)
+                .groupby([ppl.bus, ppl.carrier_gy])
+                .sum()
+                .div(w.groupby([ppl.bus, ppl.carrier_gy]).sum())
+            )
+            plain = ppl[col].groupby([ppl.bus, ppl.carrier_gy]).mean()
+            key = pd.MultiIndex.from_frame(ppl_grouped[["bus", "carrier_gy"]])
+            # groups without capacity (p_nom 0) take the plain mean
+            ppl_grouped[col] = weighted.reindex(key).fillna(plain.reindex(key)).values
 
     # Calculate build_year and lifetime
     ppl_grouped["build_year"] = ppl_grouped["datein"].astype(int)
@@ -759,7 +806,12 @@ def attach_conventional_generators(
         .join(costs, on="carrier", rsuffix="_r")
         .rename(index=lambda s: "C" + str(s))
     )
-    ppl["efficiency"] = ppl.efficiency.fillna(ppl.efficiency)
+    # plant efficiency (plant data or electricity.powerplants_efficiency), else the cost table's
+    ppl["efficiency"] = ppl.efficiency.fillna(ppl.efficiency_r)
+    # marginal cost with the plant's efficiency: the cost table's value plus the change of the fuel term
+    ppl["marginal_cost"] = ppl.marginal_cost + ppl.fuel.fillna(0.0) * (
+        1 / ppl.efficiency - 1 / ppl.efficiency_r
+    )
 
     # Aggregate power plants by (bus, carrier, grouping_year)
     ppl_grouped = aggregate_ppl_by_bus_carrier_year(ppl)
@@ -1283,6 +1335,7 @@ if __name__ == "__main__":
         costs,
         snakemake.params.fill_values,
         snakemake.params.existing_capacities["grouping_years_power"],
+        snakemake.input.get("powerplants_efficiency"),
     )
 
     if "renewable_carriers" in snakemake.params.electricity:

@@ -246,6 +246,7 @@ electricity:
       biomass: [Solid Biomass, Biogas, Waste, Bioenergy]
       geothermal: [Geothermal]
       hydro: {fueltypes: [Hydro], exclude_technologies: [Pumped Storage], add: false}
+  powerplants_efficiency: false # true: plants without an efficiency in the plant data take it from statistics/efficiency.csv (country, carrier, efficiency; row "*" = default); otherwise the cost table's value
 
   # If you wish to replace the data for just one country (e.g. United States), you can use the option powerplants_filter as follows:
   # powerplants_filter: ... and (Country != 'United States')
