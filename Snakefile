@@ -1101,9 +1101,13 @@ rule prepare_network:
         **branch(
             config.get("calibration", {}).get("enable", False),
             {
-                f"calibration_{name}": path
-                for name, path in config.get("calibration", {}).get("tables", {}).items()
-                if path
+                f"calibration_{name}": STATISTICS + f"{name}.csv"
+                for name, on in [
+                    ("generation", config.get("calibration", {}).get("energy_bands")),
+                    ("demand", config.get("calibration", {}).get("energy_bands")),
+                    ("net_imports", config.get("calibration", {}).get("net_imports")),
+                ]
+                if on
             },
         ),
         **branch(
@@ -2589,16 +2593,6 @@ if config["foresight"] == "myopic":
             costs_base="resources/"
             + RDIR
             + f"costs_{config['costs']['year']}_elec.csv",
-            **branch(
-                config.get("calibration", {}).get("enable", False),
-                {
-                    f"calibration_{name}": path
-                    for name, path in config.get("calibration", {})
-                    .get("horizon_tables", {})
-                    .items()
-                    if path
-                },
-            ),
             **branch(
                 bool(config["load_options"].get("horizon_totals")),
                 {

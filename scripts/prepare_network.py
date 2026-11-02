@@ -371,8 +371,6 @@ if __name__ == "__main__":
     if calibration.get("enable", False):
         from calibrate_network import calibrate
 
-        if any("Ep" in o for o in opts) and "co2_prices" in calibration.get("tables", {}):
-            raise ValueError("calibration.tables.co2_prices and the Ep option both price CO2")
         tables = {
             k[len("calibration_") :]: v
             for k, v in snakemake.input.items()

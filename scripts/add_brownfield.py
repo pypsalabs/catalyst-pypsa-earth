@@ -658,22 +658,8 @@ if __name__ == "__main__":
             snakemake.params.get("supply_curves", []),
         )
 
-    # tables of the planning horizon (demand, fuel and CO2 prices), see calibrate_network.py
+    # targets of the solve-time calibration constraints (prepare_network), kept through the horizon
     calibration_meta = (n.meta or {}).get("calibration")
-    calibration_tables = {
-        k[len("calibration_") :]: v
-        for k, v in snakemake.input.items()
-        if k.startswith("calibration_")
-    }
-    if calibration_tables:
-        from calibrate_network import calibrate_horizon
-
-        calibrate_horizon(
-            n,
-            calibration_tables,
-            pd.read_csv(snakemake.input.costs, index_col=0),
-            snakemake.config.get("calibration", {}),
-        )
 
     # demand of the planning horizon (load_options.horizon_totals, build_demand_profiles)
     if "demand_profiles" in snakemake.input.keys():
