@@ -1106,6 +1106,11 @@ rule prepare_network:
                 if path
             },
         ),
+        **branch(
+            enabled(config["co2"].get("emission_prices_by_country")),
+            {"co2_prices": STATISTICS + "co2_prices.csv"},
+            {},
+        ),
         tech_costs="resources/" + RDIR + f"costs_{config['costs']['year']}_elec.csv",
     output:
         "networks/" + RDIR + "elec_s{simpl}_{clusters}_ec_l{ll}_{opts}.nc",

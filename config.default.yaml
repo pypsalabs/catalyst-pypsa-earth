@@ -629,6 +629,7 @@ co2:
   limit: 7.75e+7     # annual cap [tCO2/year]; European default — adjust for your region; active via Co2L wildcard
   base: 1.487e+9     # baseline emissions used for relative reduction targets; European default
   emission_price: 0. # [currency/tCO2]; active via Ep wildcard
+  emission_prices_by_country: false # true: statistics/co2_prices.csv (country, price [currency/tCO2]; row "*" = default) is added to marginal costs in prepare_network; not together with Ep
   automatic_emission: # derive co2.limit from historical emission data instead of the value above
     enable: false
     base_year: 1990  # any year from 1970 to 2018
