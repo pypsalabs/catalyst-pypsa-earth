@@ -623,6 +623,26 @@ rule build_demand_profiles:
         "scripts/build_demand_profiles.py"
 
 
+if config["load_options"].get("horizon_totals"):
+
+    # demand of a planning horizon (myopic): the same profiles scaled to that year's annual
+    # totals; add_brownfield replaces the loads of the horizon's network with them
+    use rule build_demand_profiles as build_demand_profiles_horizon with:
+        input:
+            **{
+                k: v
+                for k, v in rules.build_demand_profiles.input.items()
+                if k != "annual_totals"
+            },
+            annual_totals=STATISTICS + "demand_{planning_horizons}.csv",
+        output:
+            "resources/" + RDIR + "demand_profiles_{planning_horizons}.csv",
+        log:
+            "logs/" + RDIR + "build_demand_profiles_{planning_horizons}.log",
+        benchmark:
+            "benchmarks/" + RDIR + "build_demand_profiles_{planning_horizons}"
+
+
 def inputs_hydro(w):
     if w.technology == "hydro":
         HYDRO_PROFILES = {
@@ -2529,6 +2549,20 @@ if config["foresight"] == "myopic":
                     .get("horizon_tables", {})
                     .items()
                     if path
+                },
+            ),
+            **branch(
+                bool(config["load_options"].get("horizon_totals")),
+                {
+                    "demand_profiles": "resources/"
+                    + RDIR
+                    + "demand_profiles_{planning_horizons}.csv",
+                    "busmap_s": "resources/"
+                    + RDIR
+                    + "bus_regions/busmap_elec_s{simpl}.csv",
+                    "busmap": "resources/"
+                    + RDIR
+                    + "bus_regions/busmap_elec_s{simpl}_{clusters}.csv",
                 },
             ),
         output:
