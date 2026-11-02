@@ -415,8 +415,12 @@ def calibrate_envelope(n, table):
         logger.info(f"envelopes:\n{changed.round(2).to_string()}")
 
 
-def split_tranches(n, spread, tranches):
-    """Split every fixed fuel-burning generator into tranches with spread efficiencies."""
+def split_tranches(n, spread, tranches, costs=None):
+    """
+    Split every fixed fuel-burning generator into tranches with spread efficiencies;
+    the fuel part of the marginal cost (marginal cost - VOM of the cost table) scales
+    with 1 / efficiency.
+    """
     if tranches < 2 or spread <= 0:
         return
     g = n.generators
@@ -432,6 +436,8 @@ def split_tranches(n, spread, tranches):
         for col in ["p_nom", "p_nom_min", "p_nom_max"]:
             part[col] = base[col].values / tranches
         part["efficiency"] = base.efficiency.values * f
+        vom = base.carrier.map(costs["VOM"]).fillna(0.0).values if costs is not None and "VOM" in costs else 0.0
+        part["marginal_cost"] = vom + (base.marginal_cost.values - vom) / f
         parts.append(part)
     new = pd.concat(parts)
     n.mremove("Generator", idx)
@@ -709,7 +715,7 @@ def calibrate(n, costs, config, inputs):
         calibrate_vre_cf(n, _read(inputs["generation"], ["country", "group"]))
     if "envelope" in inputs:
         calibrate_envelope(n, _read(inputs["envelope"], ["country", "carrier"]))
-    split_tranches(n, config.get("efficiency_spread", 0.0), int(config.get("tranches", 1)))
+    split_tranches(n, config.get("efficiency_spread", 0.0), int(config.get("tranches", 1)), costs)
     if "fuel_prices" in inputs or "co2_prices" in inputs:
         calibrate_prices(
             n,
