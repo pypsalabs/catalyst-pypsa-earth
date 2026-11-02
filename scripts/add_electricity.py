@@ -935,24 +935,44 @@ def attach_conventional_generators(
     else:
         logger.info("No extendable conventional generators configured.")
 
-    for carrier in conventional_config:
-        # Generators with technology affected
-        idx = n.generators.query("carrier == @carrier").index
+    apply_conventional_attributes(n, conventional_config, conventional_inputs)
 
-        for attr in list(set(conventional_config[carrier]) & set(n.generators)):
-            values = conventional_config[carrier][attr]
 
-            if f"conventional_{carrier}_{attr}" in conventional_inputs:
-                # Values affecting generators of technology k country-specific
-                # First map generator buses to countries; then map countries to p_max_pu
-                values = read_csv_nafix(values, index_col=0).iloc[:, 0]
-                bus_values = n.buses.country.map(values)
-                n.generators[attr].update(
-                    n.generators.loc[idx].bus.map(bus_values).dropna()
-                )
-            else:
-                # Single value affecting all generators of technology k indiscriminantely of country
-                n.generators.loc[idx, attr] = values
+def apply_conventional_attributes(n, conventional_config, conventional_inputs=None):
+    """
+    Set generator attributes per carrier from the ``conventional:`` config.
+
+    A value is a number (all generators of the carrier) or a csv file with the
+    country in the first column and the value in the second (a row ``*`` is the
+    default for countries without one). Under ``existing:`` the keyword
+    ``statistics`` stands for such a table in the statistics directory of the run
+    (``conventional_<carrier>_<attr>.csv``, a rule input). Attributes under ``existing:`` apply only
+    to the existing (non-extendable) generators of the carrier, e.g. the operating
+    envelope of today's fleet, while the plain ones apply to all, e.g. the
+    availability of new builds.
+    """
+    for carrier, attrs in conventional_config.items():
+        gens = n.generators.query("carrier == @carrier")
+        scopes = [(gens.index, attrs)]
+        if isinstance(attrs.get("existing"), dict):
+            scopes.append((gens.index[~gens.p_nom_extendable], attrs["existing"]))
+        for k, (idx, d) in enumerate(scopes):
+            for attr, values in d.items():
+                if attr == "existing" or attr not in n.generators or idx.empty:
+                    continue
+                if values == "statistics":
+                    # the table of the statistics directory (rule input)
+                    scope = "existing_" if k else ""
+                    values = (conventional_inputs or {})[
+                        f"conventional_{carrier}_{scope}{attr}"
+                    ]
+                if isinstance(values, str) and values.endswith(".csv"):
+                    table = read_csv_nafix(values, index_col=0).iloc[:, 0]
+                    country = n.generators.loc[idx, "bus"].map(n.buses.country)
+                    v = country.map(table).fillna(table.get("*", np.nan)).dropna()
+                    n.generators.loc[v.index, attr] = v
+                else:
+                    n.generators.loc[idx, attr] = values
 
 
 def apply_nuclear_p_max_pu(n, nuclear_p_max_pu):
@@ -998,6 +1018,28 @@ def apply_nuclear_p_max_pu(n, nuclear_p_max_pu):
         "(source: IAEA 2022–2024).",
         valid.sum(),
     )
+
+
+def cap_must_run(n, share):
+    """
+    Limit the must-run output (p_min_pu x p_nom) of each country's generators to
+    ``share`` of the country's lowest load (``electricity.must_run_cap``): an islanded
+    country cannot export it, and the problem would be infeasible.
+    """
+    load_country = n.loads.bus.map(n.buses.country)
+    min_load = n.loads_t.p_set.T.groupby(load_country).sum().T.min()
+    g = n.generators
+    country = g.bus.map(n.buses.country)
+    must_run = (g.p_min_pu * g.p_nom).groupby(country).sum()
+    for c, v in must_run.items():
+        cap = share * min_load.get(c, np.inf)
+        if v > cap > 0:
+            idx = g.index[(country == c) & (g.p_min_pu > 0)]
+            n.generators.loc[idx, "p_min_pu"] *= cap / v
+            logger.warning(
+                f"must-run {c}: {v/1e3:.2f} GW above {share:.0%} of the lowest load "
+                f"{min_load[c]/1e3:.2f} GW; floors scaled by {cap / v:.2f}"
+            )
 
 
 def attach_hydro(
@@ -1451,10 +1493,13 @@ if __name__ == "__main__":
         snakemake.params.battery_techs,
         snakemake.params.electricity["max_hours"]["battery"],
     )
-    apply_nuclear_p_max_pu(
-        n,
-        read_csv_nafix(snakemake.input.nuclear_p_max_pu),
-    )
+    if snakemake.input.get("nuclear_p_max_pu"):
+        apply_nuclear_p_max_pu(
+            n,
+            read_csv_nafix(snakemake.input.nuclear_p_max_pu),
+        )
+    if snakemake.params.electricity.get("must_run_cap"):
+        cap_must_run(n, snakemake.params.electricity["must_run_cap"])
 
     update_p_nom_max(n)
     add_nice_carrier_names(n, snakemake.config)

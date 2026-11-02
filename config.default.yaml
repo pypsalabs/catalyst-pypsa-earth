@@ -247,6 +247,8 @@ electricity:
       geothermal: [Geothermal]
       hydro: {fueltypes: [Hydro], exclude_technologies: [Pumped Storage], add: false}
   powerplants_efficiency: false # true: plants without an efficiency in the plant data take it from statistics/efficiency.csv (country, carrier, efficiency; row "*" = default); otherwise the cost table's value
+  nuclear_p_max_pu: true # country availability of nuclear plants from data/nuclear_p_max_pu.csv (IAEA); false to leave it to `conventional:`
+  must_run_cap: false # (optional) share of a country's lowest load that the must-run output (p_min_pu x p_nom) may not exceed, e.g. 0.9
 
   # If you wish to replace the data for just one country (e.g. United States), you can use the option powerplants_filter as follows:
   # powerplants_filter: ... and (Country != 'United States')

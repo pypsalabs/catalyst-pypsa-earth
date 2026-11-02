@@ -762,6 +762,13 @@ rule add_electricity:
             if str(fn).startswith("data/")
         },
         **{
+            f"conventional_{carrier}_existing_{attr}": STATISTICS
+            + f"conventional_{carrier}_{attr}.csv"
+            for carrier, d in config.get("conventional", {None: {}}).items()
+            for attr, value in (d.get("existing") or {}).items()
+            if value == "statistics"
+        },
+        **{
             name: STATISTICS + table
             for name, table, on in [
                 (
@@ -783,7 +790,11 @@ rule add_electricity:
         gadm_shapes="resources/" + RDIR + "shapes/gadm_shapes.geojson",
         hydro_capacities="data/hydro_capacities.csv",
         demand_profiles="resources/" + RDIR + "demand_profiles.csv",
-        nuclear_p_max_pu="data/nuclear_p_max_pu.csv",
+        nuclear_p_max_pu=branch(
+            config["electricity"].get("nuclear_p_max_pu", True) is not False,
+            "data/nuclear_p_max_pu.csv",
+            [],
+        ),
     output:
         "networks/" + RDIR + "elec.nc",
     log:
