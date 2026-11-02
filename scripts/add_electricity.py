@@ -1034,6 +1034,44 @@ def apply_nuclear_p_max_pu(n, nuclear_p_max_pu):
     )
 
 
+def scale_to_capacity_factors(n, fn, groups, clip=(0.6, 1.4)):
+    """
+    Scale wind and solar profiles per country and group to observed capacity factors.
+
+    ``electricity.capacity_factor_targets``: the table ``fn`` (country, group, cf) gives
+    the annual capacity factor of the installed fleet; ``groups`` maps a group to its
+    carriers. The profiles of a country's generators of the group are multiplied by
+    target / modelled capacity factor of the existing capacity (a per-country loss and
+    weather-year correction of the resource model), the factor limited to ``clip`` and
+    the profiles to 1. Applied where profiles and fleet first meet, so new capacity at
+    the same sites sees the same correction.
+    """
+    lookup = read_country_table(fn, ["group"], "cf")
+    w = n.snapshot_weightings.generators
+    g = n.generators
+    country = g.bus.map(n.buses.country)
+    for group, carriers in groups.items():
+        sel = g.index[g.carrier.isin(carriers) & (g.p_nom > 0)].intersection(
+            n.generators_t.p_max_pu.columns
+        )
+        for c, idx in sel.groupby(country[sel]).items():
+            target = lookup(c, group)
+            if np.isnan(target) or target <= 0:
+                continue
+            p_nom = g.loc[idx, "p_nom"]
+            profile = n.generators_t.p_max_pu[idx]
+            now = profile.mul(p_nom, axis=1).mul(w, axis=0).sum().sum() / (
+                p_nom.sum() * w.sum()
+            )
+            if now <= 0:
+                continue
+            f = float(np.clip(target / now, *clip))
+            n.generators_t.p_max_pu[idx] = (profile * f).clip(upper=1.0)
+            logger.info(
+                f"capacity factor {c} {group}: {now:.3f} -> {target:.3f} (x{f:.2f})"
+            )
+
+
 def cap_must_run(n, share):
     """
     Limit the must-run output (p_min_pu x p_nom) of each country's generators to
@@ -1496,6 +1534,14 @@ if __name__ == "__main__":
         extendable_carriers,
         snakemake.params.length_factor,
     )
+    cf_targets = snakemake.params.electricity.get("capacity_factor_targets") or {}
+    if cf_targets.get("enable"):
+        scale_to_capacity_factors(
+            n,
+            snakemake.input.capacity_factor_targets,
+            cf_targets["groups"],
+            cf_targets.get("clip", (0.6, 1.4)),
+        )
     attach_hydro(
         n, costs, ppl, snakemake.params.renewable["hydro"]["hydro_min_inflow_pu"]
     )

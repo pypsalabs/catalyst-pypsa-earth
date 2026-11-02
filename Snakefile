@@ -777,6 +777,11 @@ rule add_electricity:
                     enabled(config["electricity"].get("powerplants_efficiency")),
                 ),
                 ("fuel_prices", "fuel_prices.csv", enabled(config["costs"].get("fuel_prices"))),
+                (
+                    "capacity_factor_targets",
+                    "generation.csv",
+                    enabled(config["electricity"].get("capacity_factor_targets") or {}),
+                ),
             ]
             if on
         },
