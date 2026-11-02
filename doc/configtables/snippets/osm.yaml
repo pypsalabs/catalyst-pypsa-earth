@@ -17,4 +17,5 @@ osm:
     group_tolerance_buses: 5000 # [m] (default 5000) Tolerance in meters of the close buses to merge
     split_overpassing_lines: true # When True, lines overpassing buses are splitted and connected to the bueses
     overpassing_lines_tolerance: 1 # [m] (default 1) Tolerance to identify lines overpassing buses
+    geodesic_length: false # When True, line lengths are measured on the ellipsoid instead of in distance_crs
     force_ac: false # When true, it forces all components (lines and substation) to be AC-only. To be used if DC assets create problem.
