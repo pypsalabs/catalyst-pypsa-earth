@@ -1294,7 +1294,7 @@ def attach_hydro(
     if "PHS" in carriers and not phs.empty:
         # fill missing max hours to config value and
         # assume no natural inflow due to lack of data
-        phs = phs.replace({"max_hours": {0: c["PHS_max_hours"]}})
+        phs["max_hours"] = phs.max_hours.replace(0, np.nan).fillna(c["PHS_max_hours"])
         n.madd(
             "StorageUnit",
             phs.index,
@@ -1342,6 +1342,21 @@ def attach_hydro(
                 hydro_stats["E_store[TWh]"] * 1e3 / hydro_stats["p_nom_discharge[GW]"]
             )
 
+        elif hydro_max_hours == "statistics":
+            # reservoir energy-to-power ratio per country (country, max_hours)
+            max_hours_country = pd.read_csv(
+                snakemake.input.hydro_max_hours, comment="#"
+            ).set_index("country")["max_hours"]
+            max_hours_country = max_hours_country.reindex(
+                hydro["country"].unique()
+            ).fillna(max_hours_country.get("*", np.nan))
+
+        else:
+            raise ValueError(
+                "renewable: hydro: hydro_max_hours must be 'energy_capacity_totals_by_country', "
+                f"'estimate_by_large_installations' or 'statistics', not {hydro_max_hours!r}"
+            )
+
         max_hours_country.clip(lower=0, inplace=True)
 
         missing_countries = pd.Index(hydro["country"].unique()).difference(
@@ -1353,9 +1368,15 @@ def attach_hydro(
                 f"Assuming max_hours={hydro_max_hours_default} for hydro reservoirs in the countries: "
                 "{}".format(", ".join(missing_countries))
             )
-        hydro_max_hours = hydro.max_hours.where(
-            hydro.max_hours > 0, hydro.country.map(max_hours_country)
-        ).fillna(hydro_max_hours_default)
+        if hydro_max_hours == "statistics":
+            # the table replaces the plant data's durations
+            hydro_max_hours = hydro.country.map(max_hours_country).fillna(
+                hydro_max_hours_default
+            )
+        else:
+            hydro_max_hours = hydro.max_hours.where(
+                hydro.max_hours > 0, hydro.country.map(max_hours_country)
+            ).fillna(hydro_max_hours_default)
 
         n.madd(
             "StorageUnit",

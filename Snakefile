@@ -785,6 +785,11 @@ rule add_electricity:
                     "generation.csv",
                     enabled(config["electricity"].get("capacity_factor_targets") or {}),
                 ),
+                (
+                    "hydro_max_hours",
+                    "hydro_max_hours.csv",
+                    config["renewable"]["hydro"].get("hydro_max_hours") == "statistics",
+                ),
             ]
             if on
         },
