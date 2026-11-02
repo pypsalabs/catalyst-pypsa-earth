@@ -579,6 +579,11 @@ rule build_demand_profiles:
             config["load_options"].get("fallback_source") == "demcast",
             "data/demand/forecasts_on_historical_period.parquet",
         ),
+        annual_totals=branch(
+            bool(config["load_options"].get("annual_totals")),
+            config["load_options"].get("annual_totals"),
+            [],
+        ),
         #gadm_shapes="resources/" + RDIR + "shapes/MAR2.geojson",
         #using this line instead of the following will test updated gadm shapes for MA.
         #To use: downlaod file from the google drive and place it in resources/" + RDIR + "shapes/
@@ -597,6 +602,26 @@ rule build_demand_profiles:
         "scripts/build_demand_profiles.py"
 
 
+if config["load_options"].get("horizon_totals"):
+
+    # demand of a planning horizon (myopic): the same profiles scaled to that year's annual
+    # totals; add_brownfield replaces the loads of the horizon's network with them
+    use rule build_demand_profiles as build_demand_profiles_horizon with:
+        input:
+            **{
+                k: v
+                for k, v in rules.build_demand_profiles.input.items()
+                if k != "annual_totals"
+            },
+            annual_totals=config["load_options"]["horizon_totals"],
+        output:
+            "resources/" + RDIR + "demand_profiles_{planning_horizons}.csv",
+        log:
+            "logs/" + RDIR + "build_demand_profiles_{planning_horizons}.log",
+        benchmark:
+            "benchmarks/" + RDIR + "build_demand_profiles_{planning_horizons}"
+
+
 def inputs_hydro(w):
     if w.technology == "hydro":
         HYDRO_PROFILES = {
@@ -606,6 +631,9 @@ def inputs_hydro(w):
             "powerplants": "resources/" + RDIR + "powerplants.csv",
             "hydrobasins": config["renewable"]["hydro"]["resource"]["hydrobasins"],
         }
+        normalization = config["renewable"]["hydro"].get("normalization") or {}
+        if normalization.get("method") == "custom":
+            HYDRO_PROFILES["hydro_statistics"] = normalization["file"]
         return HYDRO_PROFILES
     else:
         return {}
@@ -657,9 +685,15 @@ rule build_powerplants:
         fill_missing_dateout=config["existing_capacities"].get(
             "fill_missing_dateout", True
         ),
+        powerplants_statistics=config["electricity"].get("powerplants_statistics", {}),
     input:
         base_network="networks/" + RDIR + "base.nc",
         pm_config="configs/powerplantmatching_config.yaml",
+        powerplants_statistics=branch(
+            bool(config["electricity"].get("powerplants_statistics", {}).get("file")),
+            config["electricity"].get("powerplants_statistics", {}).get("file"),
+            [],
+        ),
         custom_powerplants=branch(
             config["electricity"]["custom_powerplants"]["method"] is not False,
             config["electricity"]["custom_powerplants"]["filepaths"],
@@ -690,6 +724,7 @@ rule add_electricity:
         countries=config["countries"],
         output_currency=config["costs"]["output_currency"],
         fill_values=config["costs"]["fill_values"],
+        costs=config["costs"],
         conventional=config.get("conventional", {}),
         electricity=config["electricity"],
         alternative_clustering=config["clustering"]["alternative_clustering"],
@@ -709,7 +744,27 @@ rule add_electricity:
             f"conventional_{carrier}_{attr}": fn
             for carrier, d in config.get("conventional", {None: {}}).items()
             for attr, fn in d.items()
-            if str(fn).startswith("data/")
+            if str(fn).startswith("data/") or str(fn).endswith(".csv")
+        },
+        **{
+            f"conventional_{carrier}_existing_{attr}": fn
+            for carrier, d in config.get("conventional", {None: {}}).items()
+            for attr, fn in (d.get("existing") or {}).items()
+            if str(fn).endswith(".csv")
+        },
+        **{
+            k: v
+            for k, v in {
+                "powerplants_efficiency": config["electricity"].get(
+                    "powerplants_efficiency"
+                ),
+                "fuel_prices": config["costs"].get("fuel_prices"),
+                "capacity_factor_targets": (
+                    config["electricity"].get("capacity_factor_targets") or {}
+                ).get("file"),
+                "hydro_max_hours": config["renewable"]["hydro"].get("hydro_max_hours"),
+            }.items()
+            if str(v).endswith(".csv")
         },
         base_network="networks/" + RDIR + "base.nc",
         tech_costs="resources/" + RDIR + f"costs_{config['costs']['year']}_elec.csv",
@@ -721,7 +776,12 @@ rule add_electricity:
         gadm_shapes="resources/" + RDIR + "shapes/gadm_shapes.geojson",
         hydro_capacities="data/hydro_capacities.csv",
         demand_profiles="resources/" + RDIR + "demand_profiles.csv",
-        nuclear_p_max_pu="data/nuclear_p_max_pu.csv",
+        nuclear_p_max_pu=branch(
+            config["electricity"].get("nuclear_p_max_pu", "data/nuclear_p_max_pu.csv")
+            is not False,
+            config["electricity"].get("nuclear_p_max_pu", "data/nuclear_p_max_pu.csv"),
+            [],
+        ),
     output:
         "networks/" + RDIR + "elec.nc",
     log:
@@ -1019,6 +1079,11 @@ rule prepare_network:
                 for name, path in config.get("calibration", {}).get("tables", {}).items()
                 if path
             },
+        ),
+        **branch(
+            bool(config["co2"].get("emission_prices_by_country")),
+            {"co2_prices": config["co2"].get("emission_prices_by_country")},
+            {},
         ),
         tech_costs="resources/" + RDIR + f"costs_{config['costs']['year']}_elec.csv",
     output:
@@ -2499,13 +2564,17 @@ if config["foresight"] == "myopic":
             + RDIR
             + f"costs_{config['costs']['year']}_elec.csv",
             **branch(
-                config.get("calibration", {}).get("enable", False),
+                bool(config["load_options"].get("horizon_totals")),
                 {
-                    f"calibration_{name}": path
-                    for name, path in config.get("calibration", {})
-                    .get("horizon_tables", {})
-                    .items()
-                    if path
+                    "demand_profiles": "resources/"
+                    + RDIR
+                    + "demand_profiles_{planning_horizons}.csv",
+                    "busmap_s": "resources/"
+                    + RDIR
+                    + "bus_regions/busmap_elec_s{simpl}.csv",
+                    "busmap": "resources/"
+                    + RDIR
+                    + "bus_regions/busmap_elec_s{simpl}_{clusters}.csv",
                 },
             ),
         output:

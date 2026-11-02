@@ -115,12 +115,31 @@ def _add_missing_carriers_from_costs(n, costs, carriers):
     n.import_components_from_dataframe(emissions, "Carrier")
 
 
+def read_country_table(fn, keys, column):
+    """
+    Read a statistics table with a ``country`` column (ISO 3166-1 alpha-2) and further
+    key columns ``keys``; a row with country ``*`` is the default for countries without
+    an entry. Returns a function (country, *keys) -> value (NaN if neither exists).
+    """
+    table = pd.read_csv(fn, comment="#").set_index(["country", *keys])[column]
+
+    def lookup(country, *key):
+        for c in (country, "*"):
+            k = (c, *key) if key else c
+            if k in table.index:
+                return table.loc[k]
+        return np.nan
+
+    return lookup
+
+
 def load_powerplants(
     ppl_fn: str,
     costs: pd.DataFrame = None,
     fill_values: dict = None,
     grouping_years: list = None,
     fill_dateout: bool = True,
+    efficiency_fn: str = None,
 ) -> pd.DataFrame:
     """
     Load and preprocess powerplant matching data, fill missing datein/dateout, and assign grouping years.
@@ -138,6 +157,10 @@ def load_powerplants(
         Fill a missing decommissioning year with the commissioning year plus the
         technology lifetime. If False, plants without a reported decommissioning
         year get an infinite lifetime and are never retired.
+    efficiency_fn : str
+        Optional table (``electricity.powerplants_efficiency``: country, carrier,
+        efficiency) filling the efficiency of plants for which the plant data has
+        none; plants without either take the cost table's value later on.
 
     Returns
     -------
@@ -160,9 +183,22 @@ def load_powerplants(
         .powerplant.to_pypsa_names()
         .powerplant.convert_country_to_alpha2()
         .rename(columns=str.lower)
-        .drop(columns=["efficiency"])
         .replace({"carrier": carrier_dict})
     )
+    if "efficiency" not in ppl:
+        ppl["efficiency"] = np.nan
+    ppl["efficiency"] = pd.to_numeric(ppl["efficiency"], errors="coerce").where(
+        lambda e: e > 0
+    )
+    if efficiency_fn:
+        lookup = read_country_table(efficiency_fn, ["carrier"], "efficiency")
+        missing = ppl.efficiency.isna()
+        ppl.loc[missing, "efficiency"] = [
+            lookup(c, k) for c, k in zip(ppl.country[missing], ppl.carrier[missing])
+        ]
+        logger.info(
+            f"efficiency of {missing.sum() - ppl.efficiency.isna().sum()} plants from {efficiency_fn}"
+        )
     # drop powerplants with null capacity
     null_ppls = ppl[ppl.p_nom <= 0]
     if not null_ppls.empty:
@@ -397,16 +433,27 @@ def aggregate_ppl_by_bus_carrier_year(ppl: pd.DataFrame) -> pd.DataFrame:
         "max_hours": "mean",
     }
 
-    if "marginal_cost" in ppl.columns:
-        agg_dict["marginal_cost"] = "mean"
     if "capital_cost" in ppl.columns:
         agg_dict["capital_cost"] = "mean"
-    if "efficiency" in ppl.columns:
-        agg_dict["efficiency"] = "mean"
     if "country" in ppl.columns:
         agg_dict["country"] = "first"
 
     ppl_grouped = ppl.groupby(["bus", "carrier_gy"]).agg(agg_dict).reset_index()
+
+    # efficiency and marginal cost of a group: capacity-weighted means of its plants
+    for col in ["efficiency", "marginal_cost"]:
+        if col in ppl.columns:
+            w = ppl.p_nom.where(ppl[col].notna(), 0.0)
+            weighted = (
+                (ppl[col].fillna(0.0) * w)
+                .groupby([ppl.bus, ppl.carrier_gy])
+                .sum()
+                .div(w.groupby([ppl.bus, ppl.carrier_gy]).sum())
+            )
+            plain = ppl[col].groupby([ppl.bus, ppl.carrier_gy]).mean()
+            key = pd.MultiIndex.from_frame(ppl_grouped[["bus", "carrier_gy"]])
+            # groups without capacity (p_nom 0) take the plain mean
+            ppl_grouped[col] = weighted.reindex(key).fillna(plain.reindex(key)).values
 
     # Calculate build_year and lifetime
     ppl_grouped["build_year"] = ppl_grouped["datein"].astype(int)
@@ -671,6 +718,20 @@ def attach_wind_and_solar(
             if not targets.empty:
                 buses_country = n.buses.loc[ds.indexes["bus"], "country"]
                 existing_by_country = caps_existing.groupby(buses_country).sum()
+                if estimate_cfg.get("scale_down", False):
+                    # the statistics are the installed fleet: a plant list above them
+                    # (duplicates, plants not yet in operation) is scaled down to them
+                    over = (
+                        existing_by_country > targets.reindex(existing_by_country.index)
+                    ) & (targets.reindex(existing_by_country.index) > 0)
+                    factor = (targets / existing_by_country).where(over).dropna()
+                    for country, f in factor.items():
+                        buses_c = buses_country.index[buses_country == country]
+                        caps_existing.loc[buses_c] *= f
+                        logger.info(
+                            f"{carrier} {country}: plant list scaled to the statistics (x{f:.2f})"
+                        )
+                    existing_by_country = caps_existing.groupby(buses_country).sum()
                 gap_by_country = targets.sub(existing_by_country, fill_value=0.0).clip(
                     lower=0.0
                 )
@@ -741,6 +802,40 @@ def attach_wind_and_solar(
             )
 
 
+# generator carrier -> fuel of the cost table (``costs: fuel_map`` extends it)
+FUEL_MAP = {
+    "coal": "coal",
+    "lignite": "lignite",
+    "CCGT": "gas",
+    "OCGT": "gas",
+    "oil": "oil",
+    "nuclear": "uranium",
+    "biomass": "biomass",
+}
+
+
+def fuel_price_lookup(fn, fuel_map, costs):
+    """
+    Vectorised fuel price (country, carrier) -> price per MWh_th: the country's price of
+    the carrier's fuel from the table ``fn`` (``costs: fuel_prices``; country, fuel,
+    price; row ``*`` = default), else the cost table's fuel price of the carrier.
+    """
+    fuels = dict(FUEL_MAP, **(fuel_map or {}))
+    lookup = read_country_table(fn, ["fuel"], "price") if fn else None
+    default = costs["fuel"] if "fuel" in costs else pd.Series(dtype=float)
+
+    def price(countries, carriers):
+        out = []
+        for c, k in zip(countries, carriers):
+            p = lookup(c, fuels[k]) if lookup is not None and k in fuels else np.nan
+            out.append(p if not np.isnan(p) else default.get(k, 0.0))
+        return pd.Series(
+            out, index=getattr(countries, "index", None), dtype=float
+        ).fillna(0.0)
+
+    return price
+
+
 def attach_conventional_generators(
     n: pypsa.Network,
     costs: pd.DataFrame,
@@ -751,6 +846,8 @@ def attach_conventional_generators(
     conventional_config: list,
     conventional_inputs: dict,
     extendable_buses: str = "existing",
+    fuel_prices: str = None,
+    fuel_map: dict = None,
 ) -> None:
     """
     Add existing conventional generators to the network and extendable conventional generators.
@@ -777,6 +874,10 @@ def attach_conventional_generators(
         Where the extendable conventional generators are added (``electricity:
         extendable_carriers_buses``): ``existing`` at the buses with an existing
         plant of the carrier, ``all`` at every AC bus.
+    fuel_prices : str
+        Optional table of fuel prices per country (``costs: fuel_prices``: country,
+        fuel, price in the output currency per MWh_th). The fuel of a carrier comes
+        from ``fuel_map`` (``costs: fuel_map``, default ``FUEL_MAP``).
 
     Returns
     -------
@@ -792,7 +893,16 @@ def attach_conventional_generators(
         .join(costs, on="carrier", rsuffix="_r")
         .rename(index=lambda s: "C" + str(s))
     )
-    ppl["efficiency"] = ppl.efficiency.fillna(ppl.efficiency)
+    # plant efficiency (plant data or electricity.powerplants_efficiency), else the cost table's
+    ppl["efficiency"] = ppl.efficiency.fillna(ppl.efficiency_r)
+    # marginal cost with the plant's efficiency and the fuel price of its country:
+    # the cost table's value plus the change of the fuel term
+    fuel = fuel_price_lookup(fuel_prices, fuel_map, costs)
+    ppl["marginal_cost"] = (
+        ppl.marginal_cost
+        + fuel(ppl.country, ppl.carrier) / ppl.efficiency
+        - ppl.fuel.fillna(0.0) / ppl.efficiency_r
+    )
 
     # Aggregate power plants by (bus, carrier, grouping_year)
     ppl_grouped = aggregate_ppl_by_bus_carrier_year(ppl)
@@ -836,6 +946,16 @@ def attach_conventional_generators(
                 carrier_buses = all_buses
             else:
                 carrier_buses = ppl[ppl.carrier == carrier]["bus"].unique()
+            eff = costs.at[carrier, "efficiency"]
+            countries = n.buses.loc[carrier_buses, "country"]
+            marginal_cost = (
+                costs.at[carrier, "marginal_cost"]
+                + (
+                    fuel(countries, pd.Series(carrier, index=countries.index))
+                    - (costs.at[carrier, "fuel"] if "fuel" in costs else 0.0)
+                )
+                / eff
+            )
             n.madd(
                 "Generator",
                 carrier_buses,
@@ -843,8 +963,10 @@ def attach_conventional_generators(
                 carrier=carrier,
                 bus=carrier_buses,
                 p_nom_extendable=True,
-                efficiency=costs.at[carrier, "efficiency"],
-                marginal_cost=costs.at[carrier, "marginal_cost"],
+                efficiency=eff,
+                marginal_cost=pd.Series(
+                    marginal_cost.values, index=carrier_buses + " " + carrier
+                ),
                 capital_cost=costs.at[carrier, "capital_cost"],
                 lifetime=costs.at[carrier, "lifetime"],
             )
@@ -860,24 +982,36 @@ def attach_conventional_generators(
     else:
         logger.info("No extendable conventional generators configured.")
 
-    for carrier in conventional_config:
-        # Generators with technology affected
-        idx = n.generators.query("carrier == @carrier").index
+    apply_conventional_attributes(n, conventional_config)
 
-        for attr in list(set(conventional_config[carrier]) & set(n.generators)):
-            values = conventional_config[carrier][attr]
 
-            if f"conventional_{carrier}_{attr}" in conventional_inputs:
-                # Values affecting generators of technology k country-specific
-                # First map generator buses to countries; then map countries to p_max_pu
-                values = read_csv_nafix(values, index_col=0).iloc[:, 0]
-                bus_values = n.buses.country.map(values)
-                n.generators[attr].update(
-                    n.generators.loc[idx].bus.map(bus_values).dropna()
-                )
-            else:
-                # Single value affecting all generators of technology k indiscriminantely of country
-                n.generators.loc[idx, attr] = values
+def apply_conventional_attributes(n, conventional_config):
+    """
+    Set generator attributes per carrier from the ``conventional:`` config.
+
+    A value is a number (all generators of the carrier) or a csv file with the
+    country in the first column and the value in the second (a row ``*`` is the
+    default for countries without one). Attributes under ``existing:`` apply only
+    to the existing (non-extendable) generators of the carrier, e.g. the operating
+    envelope of today's fleet, while the plain ones apply to all, e.g. the
+    availability of new builds.
+    """
+    for carrier, attrs in conventional_config.items():
+        gens = n.generators.query("carrier == @carrier")
+        scopes = [(gens.index, attrs)]
+        if isinstance(attrs.get("existing"), dict):
+            scopes.append((gens.index[~gens.p_nom_extendable], attrs["existing"]))
+        for idx, d in scopes:
+            for attr, values in d.items():
+                if attr == "existing" or attr not in n.generators or idx.empty:
+                    continue
+                if isinstance(values, str) and values.endswith(".csv"):
+                    table = read_csv_nafix(values, index_col=0).iloc[:, 0]
+                    country = n.generators.loc[idx, "bus"].map(n.buses.country)
+                    v = country.map(table).fillna(table.get("*", np.nan)).dropna()
+                    n.generators.loc[v.index, attr] = v
+                else:
+                    n.generators.loc[idx, attr] = values
 
 
 def apply_nuclear_p_max_pu(n, nuclear_p_max_pu):
@@ -923,6 +1057,95 @@ def apply_nuclear_p_max_pu(n, nuclear_p_max_pu):
         "(source: IAEA 2022–2024).",
         valid.sum(),
     )
+
+
+def scale_to_capacity_factors(n, fn, groups, clip=(0.6, 1.4)):
+    """
+    Scale wind and solar profiles per country and group to observed capacity factors.
+
+    ``electricity.capacity_factor_targets``: the table ``fn`` (country, group, cf) gives
+    the annual capacity factor of the installed fleet; ``groups`` maps a group to its
+    carriers. The profiles of a country's generators of the group are multiplied by
+    target / modelled capacity factor of the existing capacity (a per-country loss and
+    weather-year correction of the resource model), the factor limited to ``clip`` and
+    the profiles to 1. Applied where profiles and fleet first meet, so new capacity at
+    the same sites sees the same correction.
+    """
+    lookup = read_country_table(fn, ["group"], "cf")
+    w = n.snapshot_weightings.generators
+    g = n.generators
+    country = g.bus.map(n.buses.country)
+    for group, carriers in groups.items():
+        sel = g.index[g.carrier.isin(carriers) & (g.p_nom > 0)].intersection(
+            n.generators_t.p_max_pu.columns
+        )
+        for c, idx in sel.groupby(country[sel]).items():
+            target = lookup(c, group)
+            if np.isnan(target) or target <= 0:
+                continue
+            p_nom = g.loc[idx, "p_nom"]
+            profile = n.generators_t.p_max_pu[idx]
+            now = profile.mul(p_nom, axis=1).mul(w, axis=0).sum().sum() / (
+                p_nom.sum() * w.sum()
+            )
+            if now <= 0:
+                continue
+            f = float(np.clip(target / now, *clip))
+            n.generators_t.p_max_pu[idx] = (profile * f).clip(upper=1.0)
+            logger.info(
+                f"capacity factor {c} {group}: {now:.3f} -> {target:.3f} (x{f:.2f})"
+            )
+
+
+def cap_must_run(n, share):
+    """
+    Limit the must-run output (p_min_pu x p_nom) of each country's generators to
+    ``share`` of the country's lowest load (``electricity.must_run_cap``): an islanded
+    country cannot export it, and the problem would be infeasible.
+    """
+    load_country = n.loads.bus.map(n.buses.country)
+    min_load = n.loads_t.p_set.T.groupby(load_country).sum().T.min()
+    g = n.generators
+    country = g.bus.map(n.buses.country)
+    must_run = (g.p_min_pu * g.p_nom).groupby(country).sum()
+    for c, v in must_run.items():
+        cap = share * min_load.get(c, np.inf)
+        if v > cap > 0:
+            idx = g.index[(country == c) & (g.p_min_pu > 0)]
+            n.generators.loc[idx, "p_min_pu"] *= cap / v
+            logger.warning(
+                f"must-run {c}: {v/1e3:.2f} GW above {share:.0%} of the lowest load "
+                f"{min_load[c]/1e3:.2f} GW; floors scaled by {cap / v:.2f}"
+            )
+
+
+def weight_by_capacity(n, carriers):
+    """
+    Weight the profiles of wind and solar generators by their installed capacity
+    when buses are merged (``renewable: <tech>: cluster_weight: capacity``).
+
+    ``simplify_network`` and ``cluster_network`` average ``p_max_pu`` with the
+    generator ``weight`` (``clustering: aggregation_strategies: generators:
+    p_max_pu: weighted_average``), which is the technical potential of the bus from
+    ``build_renewable_profiles``. The existing fleet stands at a few of those buses,
+    so a potential-weighted profile does not describe it. With this option the
+    weight is the installed capacity, and the potential (scaled to at most 1e-3 MW)
+    only decides between buses without any: a cluster with existing capacity gets
+    the capacity factor of its fleet, one without keeps the potential-weighted
+    profile.
+    """
+    for carrier in carriers:
+        i = n.generators.index[n.generators.carrier == carrier]
+        if i.empty:
+            continue
+        potential = n.generators.loc[i, "weight"].astype(float).fillna(0.0)
+        if potential.max() > 0:
+            potential = potential / potential.max()
+        n.generators.loc[i, "weight"] = n.generators.loc[i, "p_nom"] + 1e-3 * potential
+        logger.info(
+            f"cluster weight of {carrier}: installed capacity "
+            f"({(n.generators.loc[i, 'p_nom'] > 0).sum()} of {len(i)} buses)"
+        )
 
 
 def attach_hydro(
@@ -1096,7 +1319,7 @@ def attach_hydro(
     if "PHS" in carriers and not phs.empty:
         # fill missing max hours to config value and
         # assume no natural inflow due to lack of data
-        phs = phs.replace({"max_hours": {0: c["PHS_max_hours"]}})
+        phs["max_hours"] = phs.max_hours.replace(0, np.nan).fillna(c["PHS_max_hours"])
         n.madd(
             "StorageUnit",
             phs.index,
@@ -1144,6 +1367,21 @@ def attach_hydro(
                 hydro_stats["E_store[TWh]"] * 1e3 / hydro_stats["p_nom_discharge[GW]"]
             )
 
+        elif str(hydro_max_hours).endswith(".csv"):
+            # reservoir energy-to-power ratio per country (country, max_hours)
+            max_hours_country = pd.read_csv(
+                snakemake.input.hydro_max_hours, comment="#"
+            ).set_index("country")["max_hours"]
+            max_hours_country = max_hours_country.reindex(
+                hydro["country"].unique()
+            ).fillna(max_hours_country.get("*", np.nan))
+
+        else:
+            raise ValueError(
+                "renewable: hydro: hydro_max_hours must be 'energy_capacity_totals_by_country', "
+                f"'estimate_by_large_installations' or a csv file, not {hydro_max_hours!r}"
+            )
+
         max_hours_country.clip(lower=0, inplace=True)
 
         missing_countries = pd.Index(hydro["country"].unique()).difference(
@@ -1155,9 +1393,15 @@ def attach_hydro(
                 f"Assuming max_hours={hydro_max_hours_default} for hydro reservoirs in the countries: "
                 "{}".format(", ".join(missing_countries))
             )
-        hydro_max_hours = hydro.max_hours.where(
-            hydro.max_hours > 0, hydro.country.map(max_hours_country)
-        ).fillna(hydro_max_hours_default)
+        if str(hydro_max_hours).endswith(".csv"):
+            # the table replaces the plant data's durations
+            hydro_max_hours = hydro.country.map(max_hours_country).fillna(
+                hydro_max_hours_default
+            )
+        else:
+            hydro_max_hours = hydro.max_hours.where(
+                hydro.max_hours > 0, hydro.country.map(max_hours_country)
+            ).fillna(hydro_max_hours_default)
 
         n.madd(
             "StorageUnit",
@@ -1317,6 +1561,7 @@ if __name__ == "__main__":
         snakemake.params.fill_values,
         snakemake.params.existing_capacities["grouping_years_power"],
         snakemake.params.existing_capacities.get("fill_missing_dateout", True),
+        snakemake.input.get("powerplants_efficiency"),
     )
 
     if "renewable_carriers" in snakemake.params.electricity:
@@ -1353,6 +1598,8 @@ if __name__ == "__main__":
         snakemake.params.conventional,
         conventional_inputs,
         snakemake.params.electricity.get("extendable_carriers_buses", "existing"),
+        snakemake.input.get("fuel_prices"),
+        snakemake.params.costs.get("fuel_map"),
     )
     attach_wind_and_solar(
         n,
@@ -1362,6 +1609,23 @@ if __name__ == "__main__":
         renewable_carriers,
         extendable_carriers,
         snakemake.params.length_factor,
+    )
+    cf_targets = snakemake.params.electricity.get("capacity_factor_targets") or {}
+    if cf_targets.get("file"):
+        scale_to_capacity_factors(
+            n,
+            snakemake.input.capacity_factor_targets,
+            cf_targets["groups"],
+            cf_targets.get("clip", (0.6, 1.4)),
+        )
+    weight_by_capacity(
+        n,
+        [
+            t
+            for t in renewable_carriers
+            if (snakemake.params.renewable.get(t) or {}).get("cluster_weight")
+            == "capacity"
+        ],
     )
     attach_hydro(
         n, costs, ppl, snakemake.params.renewable["hydro"]["hydro_min_inflow_pu"]
@@ -1374,10 +1638,13 @@ if __name__ == "__main__":
         snakemake.params.battery_techs,
         snakemake.params.electricity["max_hours"]["battery"],
     )
-    apply_nuclear_p_max_pu(
-        n,
-        read_csv_nafix(snakemake.input.nuclear_p_max_pu),
-    )
+    if snakemake.input.get("nuclear_p_max_pu"):
+        apply_nuclear_p_max_pu(
+            n,
+            read_csv_nafix(snakemake.input.nuclear_p_max_pu),
+        )
+    if snakemake.params.electricity.get("must_run_cap"):
+        cap_must_run(n, snakemake.params.electricity["must_run_cap"])
 
     update_p_nom_max(n)
     add_nice_carrier_names(n, snakemake.config)

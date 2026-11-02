@@ -179,6 +179,26 @@ def add_emission_prices(n, co2_price=0.0):
     n.storage_units["marginal_cost"] += su_ep
 
 
+def add_emission_prices_by_country(n, fn):
+    """
+    Add a CO2 price per country (``co2: emission_prices_by_country``: csv with the
+    columns ``country`` and ``price`` in currency/tCO2, a row ``*`` is the default) to
+    the marginal costs of the emitting generators and storage units of the country.
+    """
+    table = pd.read_csv(fn, comment="#").set_index("country")["price"]
+    emissions = n.carriers.filter(like="_emissions").sum(axis=1)
+    for c, eff in [("Generator", "efficiency"), ("StorageUnit", "efficiency_dispatch")]:
+        df = n.df(c)
+        price = df.bus.map(n.buses.country).map(table).fillna(table.get("*", 0.0))
+        intensity = df.carrier.map(emissions).fillna(0.0)
+        emitting = intensity > 0
+        df.loc[emitting, "marginal_cost"] += (
+            price * intensity / df[eff]
+        )[emitting]
+    logger.info(f"CO2 prices by country from {fn}: " + ", ".join(
+        f"{k} {v:.1f}" for k, v in table.items()))
+
+
 def set_line_s_max_pu(n, s_max_pu):
     n.lines["s_max_pu"] = s_max_pu
     logger.info(f"N-1 security margin of lines set to {s_max_pu}")
@@ -351,8 +371,6 @@ if __name__ == "__main__":
     if calibration.get("enable", False):
         from calibrate_network import calibrate
 
-        if any("Ep" in o for o in opts) and "co2_prices" in calibration.get("tables", {}):
-            raise ValueError("calibration.tables.co2_prices and the Ep option both price CO2")
         tables = {
             k[len("calibration_") :]: v
             for k, v in snakemake.input.items()
@@ -427,6 +445,11 @@ if __name__ == "__main__":
                 for c in n.iterate_components(comps):
                     sel = c.df.carrier.str.contains(carrier)
                     c.df.loc[sel, attr] *= factor
+
+    if snakemake.input.get("co2_prices"):
+        if any("Ep" in o for o in opts):
+            raise ValueError("co2: emission_prices_by_country and the Ep option both price CO2")
+        add_emission_prices_by_country(n, snakemake.input.co2_prices)
 
     for o in opts:
         if "Ep" in o:

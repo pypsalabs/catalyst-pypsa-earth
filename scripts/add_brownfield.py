@@ -170,6 +170,42 @@ def fix_capacities(n: pypsa.Network) -> None:
         )
 
 
+def replace_load(n, demand_profiles, busmaps):
+    """
+    Replace the loads of the network by the demand profiles of the planning horizon.
+
+    ``demand_profiles`` (build_demand_profiles) holds hourly load per bus of the base
+    network; it is aggregated to the network's buses through the busmaps of
+    simplify_network and cluster_network and averaged over the network's snapshots
+    (each hour belongs to the last snapshot at or before it). Several loads at one
+    bus share the new load in their current proportion.
+    """
+    load = pd.read_csv(demand_profiles, index_col=0, parse_dates=True)
+    bus = pd.Series(load.columns, index=load.columns)
+    for fn in busmaps:
+        busmap = pd.read_csv(fn, index_col=0, dtype=str).iloc[:, 0]
+        busmap.index = busmap.index.astype(str)
+        bus = bus.map(busmap).fillna(bus)
+    load = load.T.groupby(bus).sum().T
+
+    position = n.snapshots.searchsorted(load.index, side="right") - 1
+    valid = position >= 0
+    load = load[valid].groupby(n.snapshots[position[valid]]).mean()
+    load = load.reindex(n.snapshots)
+
+    current = n.loads_t.p_set
+    share = current.sum() / current.sum().groupby(n.loads.bus).transform("sum")
+    missing = set(n.loads.bus) - set(load.columns)
+    if missing:
+        raise ValueError(f"no horizon demand for the buses {sorted(missing)[:5]}")
+    new = load[n.loads.bus.values].set_axis(n.loads.index, axis=1) * share
+    w = n.snapshot_weightings.generators
+    before = current.mul(w, axis=0).sum().sum() / 1e6
+    n.loads_t.p_set = new[current.columns]
+    after = new.mul(w, axis=0).sum().sum() / 1e6
+    logger.info(f"demand of the horizon from {demand_profiles}: {before:.1f} -> {after:.1f} TWh")
+
+
 def update_capital_costs(
     n: pypsa.Network,
     costs: pd.DataFrame,
@@ -622,21 +658,15 @@ if __name__ == "__main__":
             snakemake.params.get("supply_curves", []),
         )
 
-    # tables of the planning horizon (demand, fuel and CO2 prices), see calibrate_network.py
+    # targets of the solve-time calibration constraints (prepare_network), kept through the horizon
     calibration_meta = (n.meta or {}).get("calibration")
-    calibration_tables = {
-        k[len("calibration_") :]: v
-        for k, v in snakemake.input.items()
-        if k.startswith("calibration_")
-    }
-    if calibration_tables:
-        from calibrate_network import calibrate_horizon
 
-        calibrate_horizon(
+    # demand of the planning horizon (load_options.horizon_totals, build_demand_profiles)
+    if "demand_profiles" in snakemake.input.keys():
+        replace_load(
             n,
-            calibration_tables,
-            pd.read_csv(snakemake.input.costs, index_col=0),
-            snakemake.config.get("calibration", {}),
+            snakemake.input.demand_profiles,
+            [snakemake.input.busmap_s, snakemake.input.busmap],
         )
 
     rename_clashing_vintages(n, snakemake.config["scenario"]["planning_horizons"])

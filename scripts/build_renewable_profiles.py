@@ -190,6 +190,7 @@ node (`p_nom_max`): ``simple`` and ``conservative``:
   proportional to the layout until the limit of an individual grid cell is
   reached.
 """
+
 import functools
 import os
 import time
@@ -325,6 +326,139 @@ def get_hydro_capacities_annual_hydro_generation(fn, countries, year):
     hydro_prod_by_country.index = pd.Index([year])
 
     return hydro_prod_by_country
+
+
+def get_custom_annual_hydro_generation(fn, countries, year):
+    """
+    Annual hydro generation per country from a table (``normalization: method: custom``,
+    ``file``): columns ``country``, ``twh`` and optionally ``year`` (rows of other years
+    are ignored; without the column the values are taken for ``year``).
+    """
+    df = pd.read_csv(fn, comment="#")
+    if "year" in df:
+        df = df[df.year == year]
+    s = df.set_index("country")["twh"].reindex(countries).dropna() * 1e6  # MWh/a
+    return pd.DataFrame([s.values], index=[year], columns=s.index)
+
+
+def _scale_with_clipping(runoff, p_nom, energy, iterations=60):
+    """
+    Factors f per plant such that the runoff scaled by f and clipped at the plant's
+    capacity carries the given annual energy: mean_t(min(f * runoff, p_nom)) * 8760 =
+    energy. Plants whose capacity cannot pass that energy (runoff too intermittent)
+    get the factor at which they run at capacity whenever there is runoff.
+
+    Parameters
+    ----------
+    runoff : np.ndarray
+        Runoff of the plants, shape (plants, time), MW.
+    p_nom, energy : np.ndarray
+        Capacity [MW] and annual energy [MWh] per plant.
+
+    Returns
+    -------
+    np.ndarray
+        Factor per plant.
+    """
+
+    def annual(f):
+        return np.minimum(f[:, None] * runoff, p_nom[:, None]).mean(axis=1) * 8760.0
+
+    mean = runoff.mean(axis=1) * 8760.0
+    lo = np.where(mean > 0, energy / np.where(mean > 0, mean, 1.0), 0.0)
+    # the factor that lets the smallest positive runoff of a plant reach capacity
+    smallest = np.where(runoff > 0, runoff, np.inf).min(axis=1)
+    hi = np.where(
+        np.isfinite(smallest),
+        p_nom / np.where(np.isfinite(smallest), smallest, 1.0),
+        0.0,
+    )
+    hi = np.maximum(hi, lo)
+    for _ in range(iterations):
+        mid = 0.5 * (lo + hi)
+        below = annual(mid) < energy
+        lo = np.where(below, mid, lo)
+        hi = np.where(below, hi, mid)
+    return hi
+
+
+def distribute_by_capacity(
+    plants, runoff, normalize_using_yearly, year, p_nom, technology=None, efficiency=1.0
+):
+    """
+    Give every country's hydro plants the same capacity factor (``normalization:
+    distribute: capacity``): each plant keeps the time profile of its runoff, scaled
+    so that its annual *generation* is the country's statistic times its share of the
+    country's capacity. The runoff of a plant is that of its whole basin and often
+    exceeds what the plant can pass even with seasonal storage. Countries without a
+    statistic keep their runoff.
+
+    The statistic is generation, so the inflow is set for what each plant type
+    turns into electricity downstream (``add_electricity``):
+
+    - reservoirs (``technology`` "Reservoir") store their inflow and dispatch it at
+      ``efficiency`` (``normalization: dispatch_efficiency``, the efficiency of
+      ``hydro`` in the cost table): inflow = generation / efficiency;
+    - all other plants become run-of-river generators whose availability is the
+      inflow per unit of capacity, clipped at 1: the runoff is scaled until the part
+      below capacity carries the generation, and returned clipped at capacity.
+
+    What run-of-river plants cannot pass at any scaling (runoff too intermittent)
+    is given to the reservoirs of the country.
+    """
+    annual = runoff.mean("time") * 8760.0
+    stats = normalize_using_yearly.loc[year]
+    tech = (
+        technology.reindex(plants.index)
+        if technology is not None
+        else pd.Series(index=plants.index, dtype=object)
+    )
+    out = runoff.transpose("plant", "time").copy()
+    for c, idx in plants.groupby("countries").groups.items():
+        if c not in stats.index or np.isnan(stats[c]):
+            continue
+        idx = list(idx)
+        current = annual.sel(plant=idx).to_pandas()
+        # plants without any runoff cannot carry energy; the others share it
+        cap = p_nom.reindex(idx).fillna(0.0).where(current > 0, 0.0)
+        if cap.sum() <= 0:
+            continue
+        target = stats[c] * cap / cap.sum()  # generation per plant, MWh/a
+        reservoir = tech.reindex(idx).eq("Reservoir").values
+        ror = [p for p, r in zip(idx, reservoir) if not r]
+        res = [p for p, r in zip(idx, reservoir) if r]
+        shortfall = 0.0
+        if ror:
+            r = runoff.sel(plant=ror).transpose("plant", "time").values
+            pn = cap.reindex(ror).values
+            e = target.reindex(ror).values
+            f = _scale_with_clipping(r, pn, e)
+            clipped = np.minimum(f[:, None] * r, pn[:, None])
+            out.loc[dict(plant=ror)] = clipped
+            shortfall = float((e - clipped.mean(axis=1) * 8760.0).clip(min=0).sum())
+        if res:
+            e = target.reindex(res)
+            if shortfall > 0 and e.sum() > 0:
+                e = e * (1 + shortfall / e.sum())
+                shortfall = 0.0
+            f = (
+                (e / efficiency / current.reindex(res))
+                .replace([np.inf, -np.inf], np.nan)
+                .fillna(0.0)
+            )
+            out.loc[dict(plant=res)] = runoff.sel(plant=res).transpose(
+                "plant", "time"
+            ) * xr.DataArray(f.values, dims="plant", coords={"plant": res})
+        if shortfall > 0:
+            logger.warning(
+                f"hydro {c}: {shortfall/1e6:.1f} TWh cannot pass the run-of-river capacity"
+            )
+        logger.info(
+            f"hydro {c}: {current.sum()/1e6:.1f} -> {stats[c]/1e6:.1f} TWh generation at a uniform "
+            f"capacity factor {stats[c] / (cap.sum() * 8760):.2f} ({len(ror)} run-of-river plants "
+            f"clipped at capacity, {len(res)} reservoirs at dispatch efficiency {efficiency})"
+        )
+    return out.transpose(*runoff.dims)
 
 
 def check_cutout_completness(cf):
@@ -708,9 +842,36 @@ if __name__ == "__main__":
                         path_irena_stats, countries
                     )
 
-                inflow = rescale_hydro(
-                    resource["plants"], inflow, normalize_using_yearly, norm_year
-                )
+                elif method == "custom":
+                    normalize_using_yearly = get_custom_annual_hydro_generation(
+                        paths.hydro_statistics, countries, norm_year
+                    )
+
+                else:
+                    raise ValueError(
+                        f"renewable: hydro: normalization: method {method!r} unknown"
+                    )
+
+                if normalization.get("distribute") == "capacity":
+                    # pumped storage has no natural inflow and is left out
+                    turbines = hydro_ppls.index[
+                        hydro_ppls.technology.ne("Pumped Storage")
+                    ].intersection(inflow.indexes["plant"])
+                    inflow = inflow.sel(plant=turbines)
+                    resource["plants"] = resource["plants"].loc[turbines]
+                    inflow = distribute_by_capacity(
+                        resource["plants"],
+                        inflow,
+                        normalize_using_yearly,
+                        norm_year,
+                        hydro_ppls.p_nom,
+                        hydro_ppls.technology,
+                        normalization.get("dispatch_efficiency", 1.0),
+                    )
+                else:
+                    inflow = rescale_hydro(
+                        resource["plants"], inflow, normalize_using_yearly, norm_year
+                    )
                 logger.info(
                     f"Hydro normalization method '{method}' on year-statistics {norm_year}"
                 )

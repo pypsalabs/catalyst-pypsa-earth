@@ -365,6 +365,95 @@ def add_custom_powerplants(
     )
 
 
+def harmonise_to_statistics(
+    ppl: pd.DataFrame,
+    fn: str,
+    groups: dict,
+    reference_year=None,
+) -> pd.DataFrame:
+    """
+    Scale the plant list to national capacity statistics per country and fuel group.
+
+    ``electricity.powerplants_statistics``: the table ``fn`` has the columns
+    ``country`` (ISO 3166-1 alpha-2), ``group`` and ``gw``. ``groups`` maps a group to
+    its fuel types, optionally with technologies to leave out (``hydro: {fueltypes:
+    [Hydro], exclude_technologies: [Pumped Storage]}``). Per country and group:
+
+    - plants are scaled proportionally to the statistic (location, vintage and
+      retirement year stay those of the plant data);
+    - a statistic of zero removes the group;
+    - a group with a statistic but no plant is added as synthetic plants at the
+      country's existing thermal plant sites, in proportion to their capacity
+      (``Name`` "<group> statistics", commissioning year of the site, no retirement
+      year); at the country's first plant otherwise; skipped without any plant.
+
+    Plants commissioned after ``reference_year`` (under construction, kept for
+    myopic runs) are not part of the statistic and are left alone. Groups or
+    countries without a statistic keep the plant data.
+    """
+    stats = pd.read_csv(fn, comment="#").set_index(["country", "group"])["gw"] * 1e3
+    datein = pd.to_numeric(ppl.get("DateIn"), errors="coerce")
+    current = ~(datein > reference_year) if reference_year else pd.Series(True, ppl.index)
+
+    def members(spec):
+        spec = spec if isinstance(spec, dict) else {"fueltypes": spec}
+        b = ppl.Fueltype.isin(spec["fueltypes"])
+        if spec.get("exclude_technologies"):
+            b &= ~ppl.Technology.isin(spec["exclude_technologies"])
+        return b
+
+    member = {g: members(spec) for g, spec in groups.items()}
+    thermal = pd.concat([b for g, b in member.items() if g != "hydro"], axis=1).any(axis=1)
+    added, drop = [], []
+    for (country, group), target in stats.items():
+        if group not in groups or not (ppl.Country == country).any():
+            continue
+        idx = ppl.index[(ppl.Country == country) & member[group] & current]
+        now = ppl.loc[idx, "Capacity"].sum()
+        if target <= 0:
+            if now > 0:
+                logger.info(f"statistics {country} {group}: {now/1e3:.2f} -> 0 GW (removed)")
+                drop.extend(idx)
+            continue
+        if now > 0:
+            ppl.loc[idx, "Capacity"] *= target / now
+            logger.info(f"statistics {country} {group}: {now/1e3:.2f} -> {target/1e3:.2f} GW")
+            continue
+        spec = groups[group] if isinstance(groups[group], dict) else {"fueltypes": groups[group]}
+        if spec.get("add") is False:
+            continue
+        sites = ppl[(ppl.Country == country) & thermal & current]
+        if sites.empty:
+            sites = ppl[ppl.Country == country].iloc[:1]
+        share = sites.Capacity / sites.Capacity.sum()
+        new = pd.DataFrame(
+            {
+                "Name": f"{group} statistics",
+                "Fueltype": spec["fueltypes"][0],
+                "Technology": spec.get("technology", np.nan),
+                "Set": "PP",
+                "Country": country,
+                "Capacity": (share * target).values,
+                # vintage unknown: that of the site (the reference year where the site has none)
+                "DateIn": pd.to_numeric(sites.DateIn, errors="coerce")
+                .fillna(reference_year or np.nan)
+                .values,
+                "DateOut": np.nan,
+                "lat": sites.lat.values,
+                "lon": sites.lon.values,
+                "projectID": f"statistics-{group}",
+            }
+        )
+        added.append(new)
+        logger.info(
+            f"statistics {country} {group}: added {target/1e3:.2f} GW at {len(new)} existing sites"
+        )
+    ppl = ppl.drop(drop)
+    if added:
+        ppl = pd.concat([ppl, *added], ignore_index=True, sort=False)
+    return ppl
+
+
 def replace_natural_gas_technology(df: pd.DataFrame):
     """
     Maps and replaces gas technologies in the powerplants.csv onto model
@@ -473,6 +562,15 @@ if __name__ == "__main__":
     ppl = ppl.powerplant.convert_country_to_alpha2().pipe(
         replace_natural_gas_technology
     )
+
+    statistics = snakemake.params.get("powerplants_statistics") or {}
+    if statistics.get("file"):
+        ppl = harmonise_to_statistics(
+            ppl,
+            snakemake.input.powerplants_statistics,
+            statistics["groups"],
+            statistics.get("reference_year"),
+        )
 
     # define unique index
     ppl = ppl.reset_index(drop=True)

@@ -194,6 +194,8 @@ load_options:
   prediction_year: 2030 # Valid only if "gegis" used as a source
   scale: 1 # scales all load time-series, i.e. 2 = doubles load
   fallback_source: false # "demcast": countries without load in `source` (e.g. gegis has none for HK, PR, LA, BT) take the DemandCast series of weather_year
+  annual_totals: false # (optional) csv (country, demand_twh; row "*" = default): each country's load is scaled to this annual demand before it is distributed to the buses
+  horizon_totals: false # (optional, myopic) csv path with {planning_horizons}: demand profiles per planning horizon scaled to that year's totals; add_brownfield_elec replaces the loads with them
 
 # ------------------- Electricity grid -------------------
 electricity:
@@ -226,6 +228,33 @@ electricity:
     - data/custom_powerplants.csv
     method: false  # "false" use only powerplantmatching (ppm) data, "merge" combines ppm and custom powerplants, "replace" use only custom powerplants
 
+  # (optional) scale the plant list to national capacity statistics per country and fuel group
+  # (csv: country, group, gw); plants keep location, vintage and retirement year, a statistic of 0 removes the group,
+  # a group without plants is added at the country's existing thermal plant sites (in proportion to their capacity);
+  # plants commissioned after reference_year are left out of the comparison
+  powerplants_statistics:
+    file: false
+    reference_year: false
+    groups:
+      coal: [Hard Coal, Lignite]
+      gas: [CCGT, OCGT]
+      oil: [Oil]
+      nuclear: [Nuclear]
+      biomass: [Solid Biomass, Biogas, Waste, Bioenergy]
+      geothermal: [Geothermal]
+      hydro: {fueltypes: [Hydro], exclude_technologies: [Pumped Storage], add: false}
+  powerplants_efficiency: false # (optional) csv (country, carrier, efficiency; row "*" = default) for plants without an efficiency in the plant data; otherwise the cost table's value
+  nuclear_p_max_pu: data/nuclear_p_max_pu.csv # country availability of nuclear plants (IAEA); false to leave it to `conventional:`
+  must_run_cap: false # (optional) share of a country's lowest load that the must-run output (p_min_pu x p_nom) may not exceed, e.g. 0.9
+  # (optional) scale wind and solar profiles per country to observed fleet capacity factors (csv: country, group, cf),
+  # the factor limited to `clip`
+  capacity_factor_targets:
+    file: false
+    groups:
+      wind: [onwind, offwind-ac, offwind-dc]
+      solar: [solar]
+    clip: [0.6, 1.4]
+
   # If you wish to replace the data for just one country (e.g. United States), you can use the option powerplants_filter as follows:
   # powerplants_filter: ... and (Country != 'United States')
   # custom_powerplants:
@@ -235,7 +264,8 @@ electricity:
 
   estimate_renewable_capacities:
     stats: "irena" # False, = greenfield expansion, 'irena' uses IRENA stats to add expansion limits
-    year: 2023 # Reference year, available years for IRENA stats are 2000 to 2023
+    year: 2023 # Reference year, available years for IRENA stats are 2000 to 2024 (powerplantmatching >= 0.8)
+    scale_down: false # true: where the plant list exceeds the statistics, scale it down to them (otherwise the statistics only fill gaps)
     p_nom_min: 1 # any float, scales the minimum expansion acquired from stats, i.e. 110% of <years>'s capacities => p_nom_min: 1.1
     p_nom_max: false # sets the expansion constraint, False to deactivate this option and use estimated renewable potentials determine by the workflow, float scales the p_nom_min factor accordingly
     technology_mapping:
@@ -310,6 +340,7 @@ atlite:
 renewable:
   onwind:
     cutout: auto
+    # cluster_weight: potential # (optional) weight of a bus's profile when buses are merged: 'potential' (technical potential, default) or 'capacity' (installed capacity; the potential only decides between buses without any). Same key for every wind and solar technology
     resource:
       method: wind
       turbine: Vestas_V112_3MW
@@ -404,12 +435,15 @@ renewable:
       # show_progress: true
     carriers: [ror, PHS, hydro]
     PHS_max_hours: 6
-    hydro_max_hours: "energy_capacity_totals_by_country" # not active
+    hydro_max_hours: "energy_capacity_totals_by_country" # or "estimate_by_large_installations", or a csv (country, max_hours) replacing the plant data
     hydro_max_hours_default: 6.0 # (optional, default 6) Default value of max_hours for hydro when NaN values are found
     clip_min_inflow: 1.0
     extendable: true
     normalization:
-      method: irena # 'hydro_capacities' to rescale country hydro production by using hydro_capacities, 'eia' or 'irena' to rescale by eia or irena data, false for no rescaling
+      method: irena # 'hydro_capacities' to rescale country hydro production by using hydro_capacities, 'eia' or 'irena' to rescale by eia or irena data, 'custom' for the csv in `file` (country, twh[, year]), false for no rescaling
+      # file: path.csv # with method custom
+      # distribute: capacity # (optional) give the plants of a country one capacity factor (each keeps its runoff time profile) instead of scaling the runoff uniformly; the statistic is then read as generation: run-of-river inflow is scaled until the part below capacity carries it and is clipped at capacity, reservoir inflow is divided by dispatch_efficiency
+      # dispatch_efficiency: 1.0 # (optional, with distribute: capacity) efficiency at which reservoirs turn inflow into electricity (the `hydro` efficiency of the cost table, 0.9 in technology-data)
       # use the weather year for weather-dominated variations (installed capacity is changing slowly)
       # the technology-year for policy-determined changes (installed capacity is changing quickly)
       year: 2023 # (optional) year of statistics used to rescale the runoff time series. When not provided, the cutout weather year is used
@@ -543,6 +577,8 @@ supply_curves: {} # extendable generators whose potential and cost depend on the
 costs:
   year: 2030 # cost file selection, i.e. costs_2030.csv in this case; reference year for costs is always 2020
   technology_data_version: v0.13.2
+  fuel_prices: false # (optional) csv (country, fuel, price [output currency/MWh_th]; row "*" = default): fuel prices of the conventional generators per country
+  fuel_map: {} # generator carrier -> fuel of `fuel_prices` in addition to coal, lignite, CCGT/OCGT -> gas, oil, nuclear -> uranium, biomass
   overrides: "" # (optional) csv in the technology-data format (technology, parameter, value, unit, source, further description, currency_year) whose rows replace or add to the cost table, e.g. for technologies not in technology-data; the path may contain {year}
   discountrate: [0.071] #, 0.086, 0.111]
   country_specific_data: "" # (optional) Reference to the desired technology-data directory for techno-economic input data; Only "" and "US" supported, for other values check the technology-data output directory
@@ -591,6 +627,7 @@ co2:
   limit: 7.75e+7     # annual cap [tCO2/year]; European default — adjust for your region; active via Co2L wildcard
   base: 1.487e+9     # baseline emissions used for relative reduction targets; European default
   emission_price: 0. # [currency/tCO2]; active via Ep wildcard
+  emission_prices_by_country: false # (optional) csv (country, price [currency/tCO2]; row "*" = default) added to marginal costs in prepare_network; not together with Ep
   automatic_emission: # derive co2.limit from historical emission data instead of the value above
     enable: false
     base_year: 1990  # any year from 1970 to 2018
@@ -608,11 +645,13 @@ co2:
       2050: 0.1
 
 # ------------------- Calibration to a reference year -------------------
+# The calibration data enter where the data vectors enter the workflow (load_options.annual_totals,
+# electricity.powerplants_statistics, electricity.estimate_renewable_capacities, electricity.capacity_factor_targets,
+# electricity.powerplants_efficiency, conventional:, costs.fuel_prices, renewable.hydro.normalization,
+# co2.emission_prices_by_country). This block holds what acts on the clustered network (scripts/calibrate_network.py).
 calibration:
-  enable: false          # apply the tables below to the clustered network in prepare_network (scripts/calibrate_network.py)
-  brownfield_only: false # true: freeze every generator and drop the extendable stores -> pure dispatch of the calibrated fleet (lines follow `ll`)
-  reference_year: null   # year of the tables; generators with a later build year (plants under construction) are left out of the capacity calibration
-  fuel_map: {}           # generator carrier -> fuel of `fuel_prices` in addition to the defaults (coal, lignite, CCGT/OCGT -> gas, oil, nuclear -> uranium, biomass)
+  enable: false          # apply the steps below in prepare_network
+  brownfield_only: false # true: freeze every generator and drop the extendable stores -> pure dispatch of the existing fleet (lines follow `ll`)
   efficiency_spread: 0.  # > 0: split every fuel-burning generator into `tranches` parts with efficiencies x(1-spread)..x(1+spread)
   tranches: 3
   net_import_tolerance: 0.25 # half-width of the annual net-import band, relative to the target (floor 1 TWh)
@@ -620,16 +659,9 @@ calibration:
                          # {coal: [0.85, 1.15], gas: [null, 1.15]}: solve-time constraints on the group's annual generation
   energy_band_penalty: 200 # [currency/MWh] outside the band (soft constraint); false or 0 for hard bands
   tables:                # csv files with a `country` column; leave a key out to skip that step
-    demand: ""           # country, demand_twh: annual load per country
-    capacity: ""         # country, group, gw: installed capacity per fuel group (coal, gas, oil, nuclear, biomass, geothermal, wind, solar, hydro)
-    hydro: ""            # country, inflow_twh[, max_hours]: annual hydro generation and reservoir energy-to-power ratio
-    generation: ""       # country, group, cf: observed capacity factors; wind and solar profiles are scaled to match per country
-    fuel_prices: ""      # country, fuel, price [currency/MWh_th] for gas, coal, lignite, oil, uranium, biomass
-    co2_prices: ""       # country, price [currency/tCO2]
-    envelope: ""         # country, carrier, p_min_pu, p_max_pu, efficiency: must-run floor, availability cap and fleet efficiency
+    generation: ""       # country, group, twh: observed generation (energy bands)
+    demand: ""           # country, demand_twh: exporters (generation > 1.05 x demand) get no band floor
     net_imports: ""      # country, net_imports_twh: annual net imports, enforced as a band in solve_network
-  horizon_tables: {}     # myopic foresight: tables applied per planning horizon in add_brownfield_elec, paths with {planning_horizons};
-                         # keys demand, fuel_prices, co2_prices (formats as in `tables`)
 
 # ------------------- Uncertainty -------------------
 monte_carlo:

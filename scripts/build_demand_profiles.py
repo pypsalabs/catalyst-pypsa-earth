@@ -40,6 +40,7 @@ It creates the load paths for GEGIS outputs by combining the input parameters of
 Then with a function that takes in the PyPSA network "base.nc", region and gadm shape data, the countries of interest, a scale factor, and the snapshots,
 it returns a csv file called "demand_profiles.csv", that allocates the load to the buses of the network according to GDP and population.
 """
+
 import os
 import os.path
 from itertools import product
@@ -287,6 +288,37 @@ def read_demcast_load(
     return demcast_load
 
 
+def scale_to_annual_totals(el_load, fn, start_date, end_date):
+    """
+    Scale each country's national load series so that it sums to the annual demand of a table.
+
+    The table (``load_options.annual_totals``) has the columns ``country`` (ISO 3166-1
+    alpha-2) and ``demand_twh``; a row with country ``*`` is the default. The sum is
+    taken over the modelled period (``snapshots``), so the profile keeps the shape of
+    the load source and takes its level from the statistics. Countries without a value
+    keep the source level.
+    """
+    totals = pd.read_csv(fn, comment="#").set_index("country")["demand_twh"]
+    default = totals.get("*", np.nan)
+    # boolean mask, not a label slice: with a fallback source the series of several
+    # countries are concatenated, so the time index is neither unique nor sorted
+    time = pd.to_datetime(el_load.index)
+    window = el_load.loc[
+        (time >= pd.to_datetime(start_date)) & (time < pd.to_datetime(end_date))
+    ]
+    now = window.groupby("region_code")["Electricity demand"].sum() / 1e6  # TWh
+    for country, current in now.items():
+        target = totals.get(country, default)
+        if np.isnan(target) or current <= 0:
+            logger.warning(f"annual_totals: no demand for {country}; source level kept")
+            continue
+        el_load.loc[el_load.region_code == country, "Electricity demand"] *= (
+            target / current
+        )
+        logger.info(f"annual_totals {country}: {current:.1f} -> {target:.1f} TWh")
+    return el_load
+
+
 def build_demand_profiles(
     n,
     load_source,
@@ -300,6 +332,7 @@ def build_demand_profiles(
     end_date,
     out_path,
     fallback_path=None,
+    annual_totals=None,
 ):
     """
     Create csv file of electric demand time series.
@@ -326,6 +359,9 @@ def build_demand_profiles(
     fallback_path: str, optional
         DemandCast parquet used for countries without load in the chosen source
         (load_options.fallback_source: demcast)
+    annual_totals: str, optional
+        csv with the annual demand per country (``load_options.annual_totals``),
+        see ``scale_to_annual_totals``
 
     Returns
     -------
@@ -386,6 +422,9 @@ def build_demand_profiles(
     elif isinstance(scale, (int, float)):
         logger.info(f"Load data scaled with scaling factor {scale}.")
         el_load["Electricity demand"] *= scale
+
+    if annual_totals:
+        el_load = scale_to_annual_totals(el_load, annual_totals, start_date, end_date)
 
     shapes = gpd.read_file(admin_shapes).set_index("GADM_ID")
     shapes["geometry"] = shapes["geometry"].apply(lambda x: make_valid(x))
@@ -492,4 +531,5 @@ if __name__ == "__main__":
         end_date,
         out_path,
         fallback_path=snakemake.input.get("fallback"),
+        annual_totals=snakemake.input.get("annual_totals"),
     )
