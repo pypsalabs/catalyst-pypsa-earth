@@ -700,9 +700,15 @@ rule build_powerplants:
         alternative_clustering=config["clustering"]["alternative_clustering"],
         powerplants_filter=config["electricity"]["powerplants_filter"],
         custom_powerplants=config["electricity"]["custom_powerplants"],
+        powerplants_statistics=config["electricity"].get("powerplants_statistics", {}),
     input:
         base_network="networks/" + RDIR + "base.nc",
         pm_config="configs/powerplantmatching_config.yaml",
+        powerplants_statistics=branch(
+            enabled(config["electricity"].get("powerplants_statistics", {})),
+            STATISTICS + "capacity.csv",
+            [],
+        ),
         custom_powerplants=branch(
             config["electricity"]["custom_powerplants"]["method"] is not False,
             config["electricity"]["custom_powerplants"]["filepaths"],

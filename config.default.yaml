@@ -231,6 +231,22 @@ electricity:
     - data/custom_powerplants.csv
     method: false  # "false" use only powerplantmatching (ppm) data, "merge" combines ppm and custom powerplants, "replace" use only custom powerplants
 
+  # (optional) scale the plant list to national capacity statistics per country and fuel group
+  # (statistics/capacity.csv: country, group, gw); plants keep location, vintage and retirement year, a statistic of 0 removes the group,
+  # a group without plants is added at the country's existing thermal plant sites (in proportion to their capacity);
+  # plants commissioned after reference_year are left out of the comparison
+  powerplants_statistics:
+    enable: false
+    reference_year: false
+    groups:
+      coal: [Hard Coal, Lignite]
+      gas: [CCGT, OCGT]
+      oil: [Oil]
+      nuclear: [Nuclear]
+      biomass: [Solid Biomass, Biogas, Waste, Bioenergy]
+      geothermal: [Geothermal]
+      hydro: {fueltypes: [Hydro], exclude_technologies: [Pumped Storage], add: false}
+
   # If you wish to replace the data for just one country (e.g. United States), you can use the option powerplants_filter as follows:
   # powerplants_filter: ... and (Country != 'United States')
   # custom_powerplants:
