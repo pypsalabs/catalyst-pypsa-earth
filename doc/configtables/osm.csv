@@ -11,6 +11,7 @@ clean_osm_data,,,Options passed to the ``clean_osm_data`` rule.
 -- path_custom_substations,,str,"Path to custom substation data when ``use_custom_substations`` is ``custom_only`` or ``add_custom``."
 -- use_custom_cables,,"{OSM_only, custom_only, add_custom, none}","Method for selecting which type of data is used for cables in the clean_osm_data script."
 -- path_custom_cables,,str,"Path to custom cable data when ``use_custom_cables`` is ``custom_only`` or ``add_custom``."
+-- drop_duplicate_ids,bool,"{True, False}",True: a line or cable that appears in several country extracts is kept once.
 -- fix_indirect_circuits,bool,"{True, False}","True: a way with several voltages and one total number of cables gets circuits, not cables, per voltage (voltage=230000;230000, cables=6: 1 circuit per voltage, not 3)."
 build_osm_network,,,Options passed to the ``build_osm_network`` rule.
 -- group_close_buses,bool,"{True, False}",True: close buses are merged and guarantee the voltage matching among line endings.
