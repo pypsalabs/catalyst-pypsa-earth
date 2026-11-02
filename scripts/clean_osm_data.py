@@ -544,7 +544,7 @@ def split_and_match_voltage_frequency_size(df):
     return df
 
 
-def fill_circuits(df):
+def fill_circuits(df, fix_indirect_circuits=False):
     """
     This function fills the rows circuits column so that the size of each list
     element matches the size of the list in the frequency column.
@@ -661,7 +661,13 @@ def fill_circuits(df):
         pd.to_numeric(df_indirect["cables"], errors="coerce") / min_cables
     ).rename("multiplier")
     filled_values = pd.concat([basic_cables, multiplier], axis=1).apply(
-        lambda x: ";".join([str(x["multiplier"] * v) for v in x["basic_cables"]]),
+        # multiplier * v is the number of cables of an element, multiplier the number of its circuits
+        lambda x: ";".join(
+            [
+                str(x["multiplier"] * (1 if fix_indirect_circuits else v))
+                for v in x["basic_cables"]
+            ]
+        ),
         axis=1,
     )
     df["circuits"] = df["circuits"].astype(str)
@@ -715,7 +721,7 @@ def explode_rows(df, cols):
     return df
 
 
-def integrate_lines_df(df_all_lines, distance_crs):
+def integrate_lines_df(df_all_lines, distance_crs, fix_indirect_circuits=False):
     """
     Function to add underground, under_construction, frequency and circuits.
     """
@@ -732,7 +738,7 @@ def integrate_lines_df(df_all_lines, distance_crs):
     split_and_match_voltage_frequency_size(df)
 
     # fill the circuits column for explode
-    fill_circuits(df)
+    fill_circuits(df, fix_indirect_circuits)
 
     # Add under construction info
     if "under_construction" in df.columns:
@@ -975,7 +981,11 @@ def clean_data(
     if not df_all_lines.empty:
         # Add underground, under_construction, frequency and circuits columns to the dataframe
         # and drop corresponding unused columns
-        df_all_lines = integrate_lines_df(df_all_lines, distance_crs)
+        df_all_lines = integrate_lines_df(
+            df_all_lines,
+            distance_crs,
+            data_options.get("fix_indirect_circuits", False),
+        )
 
         logger.info("Filter lines by voltage, frequency, circuits and geometry")
 
