@@ -325,11 +325,17 @@ def apply_time_segmentation(n, segments, solver_name):
 
 def enforce_autarky(n, only_crossborder=False):
     if only_crossborder:
+        # storage buses of add_extra_components (e.g. "<bus> battery") carry no country yet, only a location:
+        # take the country of the location bus, otherwise their charger / discharger links count as cross-border
+        country = n.buses.country.where(
+            n.buses.country.fillna("") != "",
+            n.buses.get("location", n.buses.country).map(n.buses.country),
+        )
         lines_rm = n.lines.loc[
-            n.lines.bus0.map(n.buses.country) != n.lines.bus1.map(n.buses.country)
+            n.lines.bus0.map(country) != n.lines.bus1.map(country)
         ].index
         links_rm = n.links.loc[
-            n.links.bus0.map(n.buses.country) != n.links.bus1.map(n.buses.country)
+            n.links.bus0.map(country) != n.links.bus1.map(country)
         ].index
     else:
         lines_rm = n.lines.index
