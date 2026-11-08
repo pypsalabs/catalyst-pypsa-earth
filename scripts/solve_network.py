@@ -88,6 +88,7 @@ import pandas as pd
 import pypsa
 import xarray as xr
 from _helpers import configure_logging, create_logger, read_csv_nafix
+import cfe
 from linopy import LinearExpression, merge
 from pypsa.descriptors import get_switchable_as_dense as get_as_dense
 from pypsa.optimization.abstract import optimize_transmission_expansion_iteratively
@@ -1141,6 +1142,7 @@ def extra_functionality(n, snapshots):
 
     add_battery_constraints(n)
     add_lossy_bidirectional_link_constraints(n)
+    cfe.add_cfe_constraints(n)   # 24/7 CFE buyers (catalyst: cfe:), no-op without
 
     calibration = (n.meta or {}).get("calibration", {})
     if calibration.get("net_import_targets"):
@@ -1230,7 +1232,26 @@ def solve_network(n, config, solving, **kwargs):
     n.config = config
     n.opts = opts
 
-    if skip_iterations:
+    cfe_meta = (n.meta or {}).get("cfe") or {}
+    if cfe_meta.get("buyers"):
+        # 24/7 CFE: grid CFE is a parameter of the matching constraint; each solve takes the grid CFE of the
+        # one before (the first: of the previous horizon), as in 247-cfe (n_iterations)
+        cfg = cfe.config_of(config)
+        for it in range(int(cfg.get("iterations", 2))):
+            status, condition = n.optimize(**kwargs)
+            if status != "ok":
+                break
+            new = cfe.grid_cfe(n, cfe_meta["buyers"], cfg)
+            old = pd.DataFrame(cfe_meta["grid_cfe"], index=n.snapshots)
+            w = n.snapshot_weightings.generators
+            logger.info(
+                f"CFE iteration {it + 1}: grid CFE "
+                + ", ".join(f"{b} {(old[b] * w).sum() / w.sum():.3f} -> {(new[b] * w).sum() / w.sum():.3f}" for b in new)
+            )
+            if it + 1 < int(cfg.get("iterations", 2)):
+                cfe_meta["grid_cfe"] = {b: [round(float(v), 5) for v in new[b]] for b in new}
+        cfe_meta["grid_cfe_result"] = {b: [round(float(v), 5) for v in new[b]] for b in new} if status == "ok" else None
+    elif skip_iterations:
         status, condition = n.optimize(**kwargs)
     else:
         kwargs["track_iterations"] = (cf_solving.get("track_iterations", False),)
@@ -1311,7 +1332,15 @@ if __name__ == "__main__":
         solving=snakemake.params.solving,
         log_fn=snakemake.log.solver,
     )
+    cfe_meta = (n.meta or {}).get("cfe")
     n.meta = dict(snakemake.config, **dict(wildcards=dict(snakemake.wildcards)))
+    if cfe_meta:
+        n.meta["cfe"] = cfe_meta  # cfe.summary reads the buyer map from n.meta
+        cfe_meta["summary"] = cfe.summary(n)
+        for b, v in cfe_meta["summary"].items():
+            logger.info(f"CFE {b}: score {v['cfe_score']:.4f}, {v['cost_per_mwh']:.1f} $/MWh vs grid "
+                        f"{v['grid_price_per_mwh']:.1f} (premium {v['premium_per_mwh']:.1f}), "
+                        f"excess {v['export_twh'] / v['demand_twh']:.1%}")
     n.export_to_netcdf(snakemake.output[0])
     logger.info(f"Objective function: {n.objective}")
     logger.info(f"Objective constant: {n.objective_constant}")

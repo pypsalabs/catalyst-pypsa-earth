@@ -2575,6 +2575,18 @@ if config["foresight"] == "myopic":
             # the first planning horizon starts from the existing capacities only
             return []
 
+        # catalyst.branch (catalyst sensitivities): a run that shares the horizons up to `year` with the run
+        # `parent_stage` starts from that run's solved network; ancient(): its mtime never re-runs the branch
+        branch = (config.get("catalyst") or {}).get("branch") or {}
+        if branch and planning_horizons[i - 1] <= int(branch["year"]):
+            return ancient(
+                "results/"
+                + branch["parent_stage"]
+                + "/networks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_"
+                + str(planning_horizons[i - 1])
+                + ".nc"
+            )
+
         return (
             "results/"
             + RDIR

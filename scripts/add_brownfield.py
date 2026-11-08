@@ -91,6 +91,7 @@ from add_existing_baseyear import (
     add_build_year_to_new_assets,
     rename_clashing_vintages,
 )
+from cfe import add_cfe_buyer, config_of, seed_grid_cfe
 
 # from pypsa.clustering.spatial import normed_or_uniform
 
@@ -669,6 +670,11 @@ if __name__ == "__main__":
             [snakemake.input.busmap_s, snakemake.input.busmap],
         )
 
+    # 24/7 CFE buyers (catalyst: cfe:), before the vintages are named and before last horizon's assets are
+    # carried over, so that the buyer's earlier builds find their buses
+    cfe_cfg = config_of(snakemake.config)
+    cfe_meta = add_cfe_buyer(n, cfe_cfg, year)
+
     rename_clashing_vintages(n, snakemake.config["scenario"]["planning_horizons"])
 
     add_build_year_to_new_assets(n, year)
@@ -683,6 +689,9 @@ if __name__ == "__main__":
         logger.info(f"Preparing brownfield from the file {network_p}")
 
         n_p = pypsa.Network(network_p)
+
+        if cfe_meta:   # grid CFE of the previous horizon seeds the first solve (n_p is consumed below)
+            seed_grid_cfe(n, n_p, cfe_meta, cfe_cfg)
 
         add_brownfield(n, n_p, year, sector_coupled=is_sector_coupled)
 
@@ -700,4 +709,8 @@ if __name__ == "__main__":
     if calibration_meta is not None:
         # targets of the solve-time calibration constraints set in prepare_network
         n.meta["calibration"] = calibration_meta
+    if cfe_meta:
+        if "grid_cfe" not in cfe_meta:
+            seed_grid_cfe(n, None, cfe_meta, cfe_cfg)
+        n.meta["cfe"] = cfe_meta
     n.export_to_netcdf(snakemake.output[0])
