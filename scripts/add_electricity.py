@@ -931,9 +931,8 @@ def attach_conventional_generators(
                 bus=carrier_buses,
                 p_nom_extendable=True,
                 efficiency=eff,
-                marginal_cost=pd.Series(
-                    marginal_cost.values, index=carrier_buses + " " + carrier
-                ),
+                # indexed by bus: PyPSA 0.30 madd aligns a Series to the names before the suffix
+                marginal_cost=pd.Series(marginal_cost.values, index=carrier_buses),
                 capital_cost=costs.at[carrier, "capital_cost"],
                 lifetime=costs.at[carrier, "lifetime"],
             )
