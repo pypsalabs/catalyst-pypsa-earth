@@ -454,10 +454,16 @@ def harmonise_to_statistics(
     return ppl
 
 
-def replace_natural_gas_technology(df: pd.DataFrame):
+def replace_natural_gas_technology(df: pd.DataFrame, mapping_update: dict = None):
     """
     Maps and replaces gas technologies in the powerplants.csv onto model
     compliant carriers.
+
+    ``mapping_update`` (``electricity: gas_technology_mapping``) replaces entries
+    of the default mapping, e.g. ``{"Steam Turbine": "OCGT"}``: powerplantmatching
+    >= 0.6 labels the gas turbines and internal combustion engines of Global Energy
+    Monitor's oil and gas tracker "Steam Turbine", like its steam turbines, so with
+    the default every open-cycle unit becomes a CCGT.
     """
     mapping = {
         "Steam Turbine": "CCGT",
@@ -473,6 +479,7 @@ def replace_natural_gas_technology(df: pd.DataFrame):
         "LCCGT": "CCGT",
         "CCGT/Fo": "CCGT",
     }
+    mapping.update(mapping_update or {})
     fueltype = df["Fueltype"] == "Natural Gas"
     df.loc[fueltype, "Technology"] = (
         df.loc[fueltype, "Technology"].replace(mapping).fillna("CCGT")
@@ -555,7 +562,8 @@ if __name__ == "__main__":
     ).query(ppl_query)
 
     ppl = ppl.powerplant.convert_country_to_alpha2().pipe(
-        replace_natural_gas_technology
+        replace_natural_gas_technology,
+        snakemake.params.get("gas_technology_mapping"),
     )
 
     statistics = snakemake.params.get("powerplants_statistics") or {}

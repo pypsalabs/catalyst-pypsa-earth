@@ -709,6 +709,7 @@ rule build_powerplants:
         powerplants_filter=config["electricity"]["powerplants_filter"],
         custom_powerplants=config["electricity"]["custom_powerplants"],
         powerplants_statistics=config["electricity"].get("powerplants_statistics", {}),
+        gas_technology_mapping=config["electricity"].get("gas_technology_mapping", {}),
     input:
         base_network="networks/" + RDIR + "base.nc",
         pm_config="configs/powerplantmatching_config.yaml",
