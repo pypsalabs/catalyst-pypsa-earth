@@ -1235,9 +1235,11 @@ def solve_network(n, config, solving, **kwargs):
     cfe_meta = (n.meta or {}).get("cfe") or {}
     if cfe_meta.get("buyers"):
         # 24/7 CFE: grid CFE is a parameter of the matching constraint; each solve takes the grid CFE of the
-        # one before (the first: of the previous horizon), as in 247-cfe (n_iterations)
+        # one before (the first: of the previous horizon), as in 247-cfe (n_iterations); without grid imports
+        # (catalyst: cfe: grid_imports: false, the default) the grid CFE is not in the problem: one solve
         cfg = cfe.config_of(config)
-        for it in range(int(cfg.get("iterations", 2))):
+        n_it = int(cfg.get("iterations", 2)) if cfe_meta.get("grid_imports", True) else 1
+        for it in range(n_it):
             status, condition = n.optimize(**kwargs)
             if status != "ok":
                 break
@@ -1248,9 +1250,11 @@ def solve_network(n, config, solving, **kwargs):
                 f"CFE iteration {it + 1}: grid CFE "
                 + ", ".join(f"{b} {(old[b] * w).sum() / w.sum():.3f} -> {(new[b] * w).sum() / w.sum():.3f}" for b in new)
             )
-            if it + 1 < int(cfg.get("iterations", 2)):
+            if it + 1 < n_it:
                 cfe_meta["grid_cfe"] = {b: [round(float(v), 5) for v in new[b]] for b in new}
         cfe_meta["grid_cfe_result"] = {b: [round(float(v), 5) for v in new[b]] for b in new} if status == "ok" else None
+        if status == "ok" and not cfe_meta.get("grid_imports", True):
+            cfe_meta["grid_cfe"] = cfe_meta["grid_cfe_result"]   # not used by the solve: record this horizon's own
     elif skip_iterations:
         status, condition = n.optimize(**kwargs)
     else:
