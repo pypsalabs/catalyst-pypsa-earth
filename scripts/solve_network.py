@@ -660,6 +660,9 @@ def _add_land_use_constraint(n):
     location = pd.Series(n.buses.index, n.buses.index)
     if "location" in n.buses:
         location = n.buses.location.replace("", np.nan).fillna(location)
+    # 24/7 CFE buyer buses sit at their grid bus (Bus has no `location` attribute in the electricity-only
+    # network, so n.add dropped it): their builds come off the same potential as the grid's
+    location.update(pd.Series(cfe.buyers(n), dtype=object))
     gen_location = n.generators.bus.map(location)
     extendable = n.generators.p_nom_extendable
 
