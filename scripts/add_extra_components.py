@@ -328,6 +328,166 @@ def attach_advance_csp(
     )
 
 
+def _class_shares(fleet: np.ndarray, cf: np.ndarray, pot: np.ndarray) -> np.ndarray:
+    """Fleet shares per class: the located plants, else CF x potential (PyPSA-Eur's rule for statistics)."""
+    w = fleet if fleet.sum() > 0 else cf * pot
+    w = np.where(pot > 0, w, 0.0)
+    return w / w.sum() if w.sum() > 0 else np.where(pot > 0, pot, 0.0) / max(pot.sum(), 1e-12)
+
+
+def _fold_small(p: np.ndarray, threshold: float) -> np.ndarray:
+    """Move fleet parts below ``threshold`` into the largest part, so none of it is dropped at the next horizon."""
+    p = p.copy()
+    if p.sum() <= 0:
+        return p
+    small = (p > 0) & (p < threshold)
+    while small.any() and (p >= threshold).any():
+        k = int(np.argmax(p))
+        p[k] += p[small].sum()
+        p[small] = 0.0
+        small = (p > 0) & (p < threshold)
+    if small.sum() > 1:  # the whole fleet is below the threshold: one part
+        k = int(np.argmax(p))
+        p[k] = p.sum()
+        p[np.arange(len(p)) != k] = 0.0
+    return p
+
+
+def attach_resource_classes(
+    n: pypsa.Network, ds: xr.Dataset, carrier: str, threshold: float, iterations: int = 5
+) -> pd.DataFrame:
+    """
+    Split the one generator ``"<bus> <carrier>"`` per clustered bus into resource classes.
+
+    One generator ``"<bus> <carrier> c<k>"`` (column ``resource_class`` = k) per class of ``build_resource_classes``
+    with potential. The split is a disaggregation of the generator G it replaces, all other attributes copied:
+
+    - fleet (``p_nom = p_nom_min``): G's calibrated fleet in the shares of the located plants per class (without
+      located plants: CF x potential), parts below 1.05 x ``threshold`` folded into the largest one;
+    - potential: ``p_nom_max_k = p_nom_k + headroom_k``, G's headroom (``p_nom_max - p_nom``) shared in proportion
+      to the room left in each class, so the classes add up to G's potential also where a class holds more
+      fleet than its own potential;
+    - profiles: the class profiles times one factor per country, chosen so that the fleet produces G's annual
+      energy (the capacity-factor calibration of ``add_electricity`` stays as it is; ``iterations`` fixed-point
+      steps for the clip at 1).
+
+    Buses without classes keep G. Returns a table per bus for the log.
+    """
+    g = n.generators
+    w = n.snapshot_weightings.generators
+    if not ds.indexes["time"].equals(n.snapshots):
+        missing = n.snapshots.difference(ds.indexes["time"])
+        if len(missing):
+            raise ValueError(f"resource classes {carrier}: {len(missing)} snapshots not in the class profiles")
+    profile_all = ds["profile"].sel(time=n.snapshots)
+    sel = g.index[(g.carrier == carrier) & g.bus.isin(ds.indexes["bus"])]
+    dup = g.loc[sel].bus.duplicated()
+    if dup.any() or (g.loc[sel, "build_year"] != 0).any():
+        raise ValueError(
+            f"resource classes {carrier}: expected one generator per bus without build year, got "
+            f"{g.loc[sel].bus[dup].tolist()} duplicated / build years {sorted(g.loc[sel, 'build_year'].unique())}"
+        )
+    no_g = ds.indexes["bus"].difference(g.loc[sel].bus)
+    if len(no_g):
+        logger.info(f"resource classes {carrier}: no generator at {len(no_g)} buses with classes: {list(no_g)[:5]}")
+
+    rows, series, report, parent = [], {}, [], {}
+    pmpu = n.generators_t.p_max_pu
+    for G in sel:
+        G_row = g.loc[G]
+        bus = G_row.bus
+        pot = ds.p_nom_max.sel(bus=bus).values
+        if pot.sum() <= 0:
+            continue
+        ks = np.flatnonzero(pot > 0)
+        shares = _class_shares(ds.fleet_mw.sel(bus=bus).values, ds.cf.sel(bus=bus).values, pot)
+        fleet = _fold_small(G_row.p_nom * shares, 1.05 * threshold)
+        fleet_min = fleet * (G_row.p_nom_min / G_row.p_nom) if G_row.p_nom > 0 else np.zeros_like(fleet)
+        room = np.clip(pot - fleet, 0.0, None)
+        head = max(G_row.p_nom_max - G_row.p_nom, 0.0) if np.isfinite(G_row.p_nom_max) else np.inf
+        if np.isfinite(head):
+            pnm = fleet + (head * room / room.sum() if room.sum() > 0 else head * pot / pot.sum())
+        else:
+            pnm = np.full_like(pot, np.inf)
+        prof = profile_all.sel(bus=bus).to_pandas()  # time x bin
+        for k in ks:
+            name = f"{G} c{k}"
+            r = G_row.copy()
+            r["p_nom"], r["p_nom_min"], r["p_nom_max"] = fleet[k], fleet_min[k], pnm[k]
+            r["weight"] = pot[k]
+            r["resource_class"] = float(k)
+            r.name = name
+            rows.append(r)
+            parent[name] = G
+            series[name] = prof[k].values
+        report.append(
+            dict(generator=G, bus=bus, country=n.buses.at[bus, "country"], p_nom=G_row.p_nom,
+                 p_nom_max=G_row.p_nom_max, class_potential=pot.sum(),
+                 E_before=float((pmpu[G] * w).sum() * G_row.p_nom) if G in pmpu else np.nan,
+                 classes=len(ks))
+        )
+    if not rows:
+        return pd.DataFrame()
+    new = pd.DataFrame(rows)
+    prof = pd.DataFrame(series, index=n.snapshots)
+
+    # energy-neutral profile factor per country
+    rep = pd.DataFrame(report).set_index("generator")
+    country = new.bus.map(n.buses.country)
+    factors = {}
+    for c, idx in new.groupby(country).groups.items():
+        e_before = rep.loc[rep.country == c, "E_before"].sum()
+        raw = prof[idx]
+        p = new.loc[idx, "p_nom"]
+        if e_before <= 0 or p.sum() <= 0:
+            factors[c] = 1.0
+            continue
+        f = 1.0
+        for _ in range(iterations):
+            e = float((raw.mul(f).clip(upper=1.0).mul(w, axis=0).sum() * p).sum())
+            f *= e_before / e
+        prof[idx] = raw.mul(f).clip(upper=1.0)
+        factors[c] = f
+        e = float((prof[idx].mul(w, axis=0).sum() * p).sum())
+        if abs(e - e_before) > 1e-4 * e_before:
+            logger.warning(f"resource classes {carrier} {c}: fleet energy {e:.0f} vs {e_before:.0f} MWh after the clip")
+
+    # other time series of G (e.g. p_min_pu) carried to its classes
+    G_of = pd.Series(parent)
+    other = {
+        attr: pd.DataFrame({k: frame[G_of[k]] for k in new.index if G_of[k] in frame}, index=n.snapshots)
+        for attr, frame in n.generators_t.items()
+        if attr != "p_max_pu" and not frame.empty and frame.columns.intersection(G_of.unique()).size
+    }
+
+    n.mremove("Generator", rep.index)
+    n.import_components_from_dataframe(new.drop(columns=["p_nom_opt"], errors="ignore"), "Generator")
+    n.import_series_from_dataframe(prof, "Generator", "p_max_pu")
+    for attr, frame in other.items():
+        n.import_series_from_dataframe(frame, "Generator", attr)
+
+    # invariants: the split conserves fleet and potential per bus
+    g = n.generators
+    after = g.loc[new.index].groupby("bus")[["p_nom", "p_nom_min", "p_nom_max"]].sum()
+    before = rep.set_index("bus")[["p_nom", "p_nom_max"]]
+    for col in ["p_nom", "p_nom_max"]:
+        b, a = before[col], after.loc[before.index, col]
+        fin = np.isfinite(b)
+        assert np.allclose(a[fin], b[fin], rtol=1e-9, atol=1e-6), f"{carrier}: {col} not conserved by the split"
+    assert (g.loc[new.index, "p_nom_max"] >= g.loc[new.index, "p_nom"] - 1e-6).all()
+
+    rep["factor"] = rep.country.map(factors)
+    rep["dev_potential"] = rep.class_potential / rep.p_nom_max - 1
+    logger.info(
+        f"resource classes {carrier}: {len(rep)} generators split into {len(new)}; per bus:\n"
+        + rep[["bus", "p_nom", "p_nom_max", "class_potential", "dev_potential", "classes", "factor"]]
+        .assign(p_nom=lambda d: d.p_nom / 1e3, p_nom_max=lambda d: d.p_nom_max / 1e3,
+                class_potential=lambda d: d.class_potential / 1e3)
+        .round(3).to_string()
+    )
+    return rep
+
+
 def attach_supply_curves(
     n: pypsa.Network,
     costs: pd.DataFrame,
@@ -490,6 +650,11 @@ if __name__ == "__main__":
     storage_techs = snakemake.params.storage_techs
 
     costs = pd.read_csv(snakemake.input.tech_costs, index_col=0)
+
+    # resource classes first: the generators to split are the ones add_electricity / clustering made
+    for tech in snakemake.params.get("resource_classes", {}) or {}:
+        with xr.open_dataset(snakemake.input[f"resource_classes_{tech}"]) as ds:
+            attach_resource_classes(n, ds.load(), tech, snakemake.params.threshold_capacity)
 
     buses_i = n.buses.index
     attach_stores(

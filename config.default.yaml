@@ -348,6 +348,7 @@ renewable:
   onwind:
     cutout: auto
     # cluster_weight: potential # (optional) weight of a bus's profile when buses are merged: 'potential' (technical potential, default) or 'capacity' (installed capacity; the potential only decides between buses without any). Same key for every wind and solar technology
+    # resource_classes: 1 # (optional) capacity-factor classes per clustered region, each its own generator '<bus> <carrier> c<k>' (onwind and solar; 1 = off). See doc/configtables/onwind.csv
     resource:
       method: wind
       turbine: Vestas_V112_3MW

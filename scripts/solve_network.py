@@ -639,6 +639,8 @@ def add_RES_constraints(n, res_share, config):
 
 def add_land_use_constraint(n):
     if "m" in snakemake.wildcards.clusters:
+        if "resource_class" in n.generators and n.generators.resource_class.notna().any():
+            raise ValueError("resource classes do not work with `m` clusters (land use parsed from names)")
         _add_land_use_constraint_m(n)
     else:
         _add_land_use_constraint(n)
@@ -665,6 +667,22 @@ def _add_land_use_constraint(n):
     location.update(pd.Series(cfe.buyers(n), dtype=object))
     gen_location = n.generators.bus.map(location)
     extendable = n.generators.p_nom_extendable
+
+    # resource classes (renewable: <tech>: resource_classes): each class has its own potential, so built
+    # capacity is netted per location and class; generators without a class keep the location alone
+    if "resource_class" in n.generators:
+        rc = n.generators.resource_class
+        classed = rc.notna()
+        for carrier in n.generators.carrier[classed].unique():
+            is_carrier = n.generators.carrier == carrier
+            loc_classed = set(gen_location[is_carrier & classed & extendable])
+            mixed = is_carrier & ~classed & ~extendable & gen_location.isin(loc_classed)
+            if mixed.any():
+                raise ValueError(
+                    f"{carrier}: capacity without resource class at locations with classes (e.g. a branch "
+                    f"whose parent ran without classes): {n.generators.index[mixed].tolist()[:5]}"
+                )
+        gen_location = gen_location + rc.map(lambda k: "" if pd.isna(k) else f" c{int(k)}")
 
     for carrier in ["solar", "solar rooftop", "onwind", "offwind-ac", "offwind-dc"]:
         is_carrier = n.generators.carrier == carrier

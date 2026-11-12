@@ -88,6 +88,21 @@ def enabled(option):
     return bool(option.get("enable")) if isinstance(option, dict) else bool(option)
 
 
+# resource classes (renewable: <tech>: resource_classes > 1): technologies whose generators are split into
+# capacity-factor classes after clustering (build_resource_cells, build_resource_classes, add_extra_components)
+RC = {
+    t: int(c.get("resource_classes", 1))
+    for t, c in config["renewable"].items()
+    if isinstance(c, dict) and int(c.get("resource_classes", 1) or 1) > 1
+}
+_rc_unsupported = set(RC) - {"onwind", "solar"}
+if _rc_unsupported:
+    raise ValueError(
+        f"renewable: resource_classes is implemented for onwind and solar only, not {sorted(_rc_unsupported)}"
+    )
+if RC and any("m" in str(c) for c in config["scenario"]["clusters"]):
+    raise ValueError("renewable: resource_classes does not work with `m` clusters")
+
 
 wildcard_constraints:
     simpl="[a-zA-Z0-9]*|all",
@@ -1028,6 +1043,58 @@ if config.get("supply_curves"):
             "scripts/build_supply_curve.py"
 
 
+if RC:
+
+    rule build_resource_cells:
+        params:
+            renewable=config["renewable"],
+        input:
+            profile="resources/" + RDIR + "renewable_profiles/profile_{technology}.nc",
+            powerplants="resources/" + RDIR + "powerplants.csv",
+            cutout=lambda w: "cutouts/"
+            + CDIR
+            + config["renewable"][w.technology]["cutout"]
+            + ".nc",
+        output:
+            "resources/" + RDIR + "renewable_profiles/cells_{technology}.nc",
+        log:
+            "logs/" + RDIR + "build_resource_cells_{technology}.log",
+        benchmark:
+            "benchmarks/" + RDIR + "build_resource_cells_{technology}"
+        wildcard_constraints:
+            technology="onwind|solar",
+        threads: ATLITE_NPROCESSES
+        resources:
+            mem_mb=ATLITE_NPROCESSES * 5000,
+        script:
+            "scripts/build_resource_cells.py"
+
+    rule build_resource_classes:
+        params:
+            renewable=config["renewable"],
+        input:
+            cells="resources/" + RDIR + "renewable_profiles/cells_{technology}.nc",
+            regions="resources/"
+            + RDIR
+            + "bus_regions/regions_onshore_elec_s{simpl}_{clusters}.geojson",
+            powerplants="resources/" + RDIR + "powerplants.csv",
+        output:
+            "resources/"
+            + RDIR
+            + "resource_classes/classes_{technology}_elec_s{simpl}_{clusters}.nc",
+        log:
+            "logs/"
+            + RDIR
+            + "build_resource_classes_{technology}_elec_s{simpl}_{clusters}.log",
+        wildcard_constraints:
+            technology="onwind|solar",
+        threads: 1
+        resources:
+            mem_mb=4000,
+        script:
+            "scripts/build_resource_classes.py"
+
+
 rule add_extra_components:
     params:
         storage_techs=config["storage_techs"],
@@ -1035,6 +1102,8 @@ rule add_extra_components:
         electricity=config["electricity"],
         csp_model=config["renewable"]["csp"]["csp_model"],
         supply_curves=config.get("supply_curves", {}) or {},
+        resource_classes=RC,
+        threshold_capacity=config["existing_capacities"]["threshold_capacity"],
     input:
         network="networks/" + RDIR + "elec_s{simpl}_{clusters}.nc",
         tech_costs="resources/" + RDIR + f"costs_{config['costs']['year']}_elec.csv",
@@ -1043,6 +1112,12 @@ rule add_extra_components:
             + RDIR
             + f"supply_curves/supply_curve_{t}_elec_s{{simpl}}_{{clusters}}.nc"
             for t in config.get("supply_curves", {}) or {}
+        },
+        **{
+            f"resource_classes_{t}": "resources/"
+            + RDIR
+            + f"resource_classes/classes_{t}_elec_s{{simpl}}_{{clusters}}.nc"
+            for t in RC
         },
     output:
         "networks/" + RDIR + "elec_s{simpl}_{clusters}_ec.nc",
