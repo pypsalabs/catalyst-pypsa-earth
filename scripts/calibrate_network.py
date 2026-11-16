@@ -123,16 +123,18 @@ def split_tranches(n, spread, tranches, costs=None):
     the fuel part of the marginal cost (marginal cost - VOM of the cost table) scales
     with 1 / efficiency.
     """
-    if tranches < 2 or spread <= 0:
-        return
     g = n.generators
-    idx = g.index[g.carrier.isin(FUELS) & ~g.p_nom_extendable & (g.p_nom > 0)]
+    # one spread for all carriers, or one per carrier (a carrier without one is not split)
+    s = g.carrier.map(spread).fillna(0.0) if isinstance(spread, dict) else pd.Series(float(spread), g.index)
+    if tranches < 2 or not (s > 0).any():
+        return
+    idx = g.index[g.carrier.isin(FUELS) & ~g.p_nom_extendable & (g.p_nom > 0) & (s > 0)]
     if idx.empty:
         return
-    factors = 1 + spread * np.linspace(-1, 1, tranches)
     base = g.loc[idx]
     parts = []
-    for i, f in enumerate(factors):
+    for i, step in enumerate(np.linspace(-1, 1, tranches)):
+        f = 1 + s[idx].values * step
         part = base.copy()
         part.index = base.index + f" t{i + 1}"
         for col in ["p_nom", "p_nom_min", "p_nom_max"]:
@@ -146,7 +148,8 @@ def split_tranches(n, spread, tranches, costs=None):
     n.import_components_from_dataframe(new.drop(columns=["p_nom_opt"], errors="ignore"), "Generator")
     logger.info(
         f"split {len(idx)} fuel-burning generators into {tranches} tranches with efficiencies "
-        f"x{factors.min():.2f}..x{factors.max():.2f}"
+        f"x{1 - s[idx].max():.2f}..x{1 + s[idx].max():.2f} (spread per carrier: "
+        f"{s[idx].groupby(base.carrier).first().round(3).to_dict()})"
     )
 
 

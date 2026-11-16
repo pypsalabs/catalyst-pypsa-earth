@@ -28,6 +28,8 @@ This part of documentation collects descriptive release notes to capture the mai
 
 * New option ``existing_capacities: dispatch_only_horizons``: planning horizons of a myopic run that are solved without expansion (every extendable capacity fixed at its lower bound), for a base year that validates the existing system before the expansion starts.
 
+* ``calibration: efficiency_spread`` takes one value per carrier (a carrier without one is not split into tranches); a single number still applies to every carrier.
+
 * New option ``renewable: <technology>: resource_classes`` (onwind and solar; the key of PyPSA-Eur): the potential of every clustered region is split into capacity-factor classes, each offered as its own generator ``<bus> <carrier> c<k>``, so the best sites are scarce instead of the whole region offering its average profile. The hourly capacity factor of every eligible cutout cell is computed once next to the renewable profiles (rule ``build_resource_cells``, using the ``potential`` of ``build_renewable_profiles``), the classes are formed on the clustered regions (rule ``build_resource_classes``) and ``add_extra_components`` splits the clustered generator: existing capacity goes to the classes where the plants stand (``powerplants.csv`` coordinates), potential and the calibrated fleet energy are conserved. In myopic runs the land-use constraint nets earlier builds per class.
 
 **Minor Changes and bug-fixing**
