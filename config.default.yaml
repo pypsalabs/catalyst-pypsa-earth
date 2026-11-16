@@ -247,6 +247,7 @@ electricity:
       geothermal: [Geothermal]
       hydro: {fueltypes: [Hydro], exclude_technologies: [Pumped Storage], add: false}
   gas_technology_mapping: {} # (optional) replaces entries of build_powerplants' gas technology -> carrier mapping, e.g. {Steam Turbine: OCGT}: powerplantmatching labels GEM's gas turbines "Steam Turbine", which the default maps to CCGT
+  powerplants_lifetimes: powerplantmatching # lifetimes that fill a missing decommissioning year of a power plant (commissioning year + lifetime): powerplantmatching's per fuel type, or 'costs' for the cost table's lifetime of the technology as in PyPSA-Eur (a reported year is kept; hydro plants then get none and are never retired)
   powerplants_efficiency: false # true: plants without an efficiency in the plant data take it from statistics/efficiency.csv (country, carrier, efficiency; row "*" = default); otherwise the cost table's value
   nuclear_p_max_pu: true # country availability of nuclear plants from data/nuclear_p_max_pu.csv (IAEA); false to leave it to `conventional:`
   must_run_cap: false # (optional) share of a country's lowest load that the must-run output (p_min_pu x p_nom) may not exceed, e.g. 0.9

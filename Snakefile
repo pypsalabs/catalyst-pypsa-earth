@@ -725,9 +725,18 @@ rule build_powerplants:
         custom_powerplants=config["electricity"]["custom_powerplants"],
         powerplants_statistics=config["electricity"].get("powerplants_statistics", {}),
         gas_technology_mapping=config["electricity"].get("gas_technology_mapping", {}),
+        powerplants_lifetimes=config["electricity"].get(
+            "powerplants_lifetimes", "powerplantmatching"
+        ),
+        fill_values=config["costs"]["fill_values"],
     input:
         base_network="networks/" + RDIR + "base.nc",
         pm_config="configs/powerplantmatching_config.yaml",
+        tech_costs=branch(
+            config["electricity"].get("powerplants_lifetimes") == "costs",
+            "resources/" + RDIR + f"costs_{config['costs']['year']}_elec.csv",
+            [],
+        ),
         powerplants_statistics=branch(
             enabled(config["electricity"].get("powerplants_statistics", {})),
             STATISTICS + "capacity.csv",

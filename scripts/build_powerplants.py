@@ -454,6 +454,57 @@ def harmonise_to_statistics(
     return ppl
 
 
+# fuel type of the plant list -> technology of the cost table (``electricity:
+# powerplants_lifetimes: costs``)
+FUELTYPE_TO_COSTS = {
+    "Hard Coal": "coal",
+    "Lignite": "lignite",
+    "Natural Gas": "CCGT",
+    "CCGT": "CCGT",
+    "OCGT": "OCGT",
+    "Nuclear": "nuclear",
+    "Oil": "oil",
+    "Solid Biomass": "biomass",
+    "Biogas": "biomass",
+    "Waste": "biomass",
+    "Bioenergy": "biomass",
+    "Geothermal": "geothermal",
+    "Wind": "onwind",
+    "Solar": "solar",
+}
+
+
+def fill_decommissioning_years_from_costs(
+    ppl: pd.DataFrame, costs: pd.DataFrame, default_lifetime: float = 30.0
+) -> pd.DataFrame:
+    """
+    Fill missing decommissioning years with the commissioning year plus the lifetime
+    of the technology in the cost table, as PyPSA-Eur does for existing capacities
+    (``add_existing_baseyear``); a reported year is kept.
+
+    ``electricity: powerplants_lifetimes: costs``. The fuel types map to cost-table
+    technologies through ``FUELTYPE_TO_COSTS``; other fuel types take
+    ``default_lifetime``. Hydro plants get no decommissioning year (infinite), so
+    they are neither dropped by ``powerplants_filter`` nor retired in myopic runs.
+    Missing commissioning years are filled first (powerplantmatching: mean of the
+    plants of the same country and fuel type).
+    """
+    ppl = ppl.powerplant.fill_missing_commissioning_years()
+    if "DateOut" not in ppl:
+        ppl["DateOut"] = np.nan
+    lifetime = (
+        ppl.Fueltype.map(FUELTYPE_TO_COSTS).map(costs["lifetime"]).fillna(default_lifetime)
+    )
+    filled = pd.to_numeric(ppl.DateIn, errors="coerce") + lifetime
+    filled = filled.where(ppl.Fueltype != "Hydro", np.inf)
+    n_missing = ppl.DateOut.isna().sum()
+    ppl["DateOut"] = pd.to_numeric(ppl.DateOut, errors="coerce").combine_first(filled)
+    logger.info(
+        f"decommissioning year of {n_missing} of {len(ppl)} plants from the cost table's lifetimes"
+    )
+    return ppl
+
+
 def replace_natural_gas_technology(df: pd.DataFrame, mapping_update: dict = None):
     """
     Maps and replaces gas technologies in the powerplants.csv onto model
@@ -545,15 +596,20 @@ if __name__ == "__main__":
     if custom_method == "replace":
         ppl = pd.DataFrame()
     else:
-        ppl = (
-            pm.powerplants(
-                from_url=False,
-                update=True,
-                config_update=config,
-            )
-            .powerplant.fill_missing_decommissioning_years()
-            .query("Country in @countries_names")
+        ppl = pm.powerplants(
+            from_url=False,
+            update=True,
+            config_update=config,
         )
+        if snakemake.params.get("powerplants_lifetimes") == "costs":
+            ppl = fill_decommissioning_years_from_costs(
+                ppl,
+                pd.read_csv(snakemake.input.tech_costs, index_col=0),
+                snakemake.params.fill_values["lifetime"],
+            )
+        else:
+            ppl = ppl.powerplant.fill_missing_decommissioning_years()
+        ppl = ppl.query("Country in @countries_names")
 
     ppl = add_custom_powerplants(
         ppl=ppl,

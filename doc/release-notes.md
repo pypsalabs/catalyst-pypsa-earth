@@ -20,6 +20,8 @@ This part of documentation collects descriptive release notes to capture the mai
 
 * New option ``electricity: extendable_carriers_buses``: with ``all`` the extendable conventional carriers of ``extendable_carriers: Generator`` are added at every AC bus instead of only where a plant of that carrier exists. The country-level nuclear availability factors now apply to the carrier ``nuclear`` only.
 
+* New option ``electricity: powerplants_lifetimes``: with ``costs`` a missing decommissioning year of a power plant is its commissioning year plus the lifetime of the technology in the cost table, as in PyPSA-Eur (``build_powerplants``); hydro plants then get none and are never retired. Default: powerplantmatching's lifetimes per fuel type, as before.
+
 * Myopic runs leave out existing assets whose build year is after the planning horizon (``add_brownfield``), so that power plants under construction, kept by ``powerplants_filter`` with their planned commissioning year, enter the model in the first horizon on or after it.
 
 * New config block ``supply_curves``: site-specific technologies (e.g. enhanced geothermal) are built as a few tranches per cluster region from a per-cell table of potentials and costs (new rule ``build_supply_curve``, attached in ``add_extra_components``), with an hourly profile from the cutout's air temperature where the output depends on it. In myopic runs the tranche costs follow the cost table rows of their components, and the land-use constraint nets out the capacity built in earlier horizons per tranche.
