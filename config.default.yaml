@@ -195,6 +195,9 @@ load_options:
   scale: 1 # scales all load time-series, i.e. 2 = doubles load
   fallback_source: false # "demcast": countries without load in `source` (e.g. gegis has none for HK, PR, LA, BT) take the DemandCast series of weather_year
 
+# Options that take a table of statistics are switches: the rules read the table from resources/<run>/statistics/
+# (file names in the comments below). Rule copy_statistics fills that directory from data/statistics/.
+
 # ------------------- Electricity grid -------------------
 electricity:
   # ----------------- Electricity generation -------------------

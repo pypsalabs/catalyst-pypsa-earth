@@ -76,6 +76,18 @@ RESDIR = config["results_dir"].strip("/") + f"/{SECDIR}"
 
 ATLITE_NPROCESSES = config["atlite"].get("nprocesses", 4)
 
+# Tables of the options that take statistics (load_options: annual_totals, electricity:
+# powerplants_statistics, costs: fuel_prices, ...): the config only switches an option on,
+# the rules read its table from this per-run directory. Rule copy_statistics fills it from
+# data/statistics/; a workflow may provide the tables with a rule of its own instead.
+STATISTICS = "resources/" + RDIR + "statistics/"
+
+
+def enabled(option):
+    """An option is on if it is true, or a dict with ``enable: true``."""
+    return bool(option.get("enable")) if isinstance(option, dict) else bool(option)
+
+
 
 wildcard_constraints:
     simpl="[a-zA-Z0-9]*|all",
@@ -110,6 +122,15 @@ rule solve_all_networks:
             "results/" + RDIR + "networks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}.nc",
             **config["scenario"],
         ),
+
+
+rule copy_statistics:
+    input:
+        "data/statistics/{table}.csv",
+    output:
+        STATISTICS + "{table}.csv",
+    run:
+        copyfile(input[0], output[0])
 
 
 rule plot_all_p_nom:

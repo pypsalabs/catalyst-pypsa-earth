@@ -14,6 +14,8 @@ This part of documentation collects descriptive release notes to capture the mai
 
 * Myopic foresight for the electricity-only model: with ``foresight: myopic`` the new target ``solve_all_networks_myopic`` solves the years of ``scenario: planning_horizons`` in sequence (rules ``add_brownfield_elec`` and ``solve_network_myopic_elec``). Capacities built in a horizon are carried to the next ones, new assets are built at the technology costs of the horizon, and existing assets are removed at the end of their lifetime (``existing_capacities: retire_existing``, also applied in the sector-coupled ``add_brownfield``).
 
+* Options that take a table of statistics are switches; their rules read the table from the per-run directory ``resources/<run>/statistics/`` (new rule ``copy_statistics`` fills it from ``data/statistics/``), so that no option carries a file path.
+
 * New option ``existing_capacities: dispatch_only_horizons``: planning horizons of a myopic run that are solved without expansion (every extendable capacity fixed at its lower bound), for a base year that validates the existing system before the expansion starts.
 
 **Minor Changes and bug-fixing**
