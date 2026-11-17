@@ -433,6 +433,65 @@ def clip_to_bbox(shapes, bbox, name="shapes"):
     return out
 
 
+def subset_by_gadm(
+    country_shapes,
+    gadm_ids,
+    layer_id,
+    geo_crs,
+    contended_flag,
+    update=False,
+    tolerance=0.01,
+    minarea=0.01,
+):
+    """
+    Restrict the shape of a country to a list of its GADM units.
+
+    Parameters
+    ----------
+    country_shapes : gpd.GeoSeries
+        Country shapes indexed by the two-letter country code.
+    gadm_ids : list[str] or None
+        GADM ids of the layer ``gadm_layer_id`` as written to gadm_shapes
+        (e.g. "US.5_1"); None or empty disables the subset.
+    layer_id : int
+        GADM layer the ids refer to.
+
+    Returns
+    -------
+    gpd.GeoSeries
+        Country shapes in which every country named by an id is the union of
+        its listed units; countries without an id are unchanged. Useful to
+        model a part of a country as its own region (e.g. the western states
+        of the US), with ``clip_bbox`` for the offshore part.
+    """
+    if not gadm_ids:
+        return country_shapes
+    subset_countries = sorted({i.split(".")[0] for i in gadm_ids})
+    unknown = set(subset_countries).difference(country_shapes.index)
+    if unknown:
+        raise ValueError(f"gadm_subset: {sorted(unknown)} are not among the countries")
+    units = get_GADM_layer(subset_countries, layer_id, geo_crs, contended_flag, update)
+    # the same id as gadm() writes: two-letter country code and the GADM sub-index
+    units["GADM_ID"] = units["GID_0"] + units["GADM_ID"].str[3:].apply(
+        lambda x: x if x.find(".") == 0 else "." + x
+    )
+    missing = set(gadm_ids).difference(units["GADM_ID"])
+    if missing:
+        raise ValueError(f"gadm_subset: no GADM unit of layer {layer_id} named {sorted(missing)}")
+    merged = (
+        units[units["GADM_ID"].isin(gadm_ids)]
+        .dissolve(by="GID_0")["geometry"]
+        .map(lambda x: _simplify_polys(x, tolerance=tolerance, minarea=minarea))
+        .make_valid()
+    )
+    out = country_shapes.copy()
+    out.loc[merged.index] = merged
+    logger.info(
+        f"gadm_subset: {subset_countries} restricted to {len(gadm_ids)} GADM units of layer {layer_id}"
+    )
+    return out
+
+
 def country_cover(
     country_shapes: gpd.GeoSeries,
     eez_shapes: gpd.GeoSeries = None,
@@ -2072,6 +2131,7 @@ if __name__ == "__main__":
     simplify_gadm = snakemake.params.build_shape_options["simplify_gadm"]
     minarea = snakemake.params.build_shape_options["minarea"]
     clip_bbox = snakemake.params.build_shape_options.get("clip_bbox")
+    gadm_subset = snakemake.params.build_shape_options.get("gadm_subset")
 
     country_shapes = countries(
         countries_list,
@@ -2079,6 +2139,15 @@ if __name__ == "__main__":
         contended_flag,
         update,
         out_logging,
+        tolerance=tolerance,
+    )
+    country_shapes = subset_by_gadm(
+        country_shapes,
+        gadm_subset,
+        layer_id,
+        geo_crs,
+        contended_flag,
+        update,
         tolerance=tolerance,
     )
     country_shapes = clip_to_bbox(country_shapes, clip_bbox, "country_shapes")
@@ -2120,6 +2189,12 @@ if __name__ == "__main__":
         minarea=minarea,
     )
 
+    if gadm_subset:
+        subset_countries = {i.split(".")[0] for i in gadm_subset}
+        gadm_shapes = gadm_shapes[
+            gadm_shapes.index.isin(gadm_subset)
+            | ~gadm_shapes["country"].isin(subset_countries)
+        ]
     gadm_shapes = clip_to_bbox(gadm_shapes, clip_bbox, "gadm_shapes")
     save_to_geojson(gadm_shapes, out.gadm_shapes)
 
