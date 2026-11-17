@@ -270,7 +270,7 @@ electricity:
   #   method: merge
 
   estimate_renewable_capacities:
-    stats: "irena" # False, = greenfield expansion, 'irena' uses IRENA stats to add expansion limits
+    stats: "irena" # False, = greenfield expansion, 'irena' uses IRENA stats to add expansion limits, 'statistics' reads the same from statistics/renewable_capacities.csv (country, technology, capacity_mw; technology named as in technology_mapping), e.g. for a run that models a part of a country
     year: 2023 # Reference year, available years for IRENA stats are 2000 to 2024 (powerplantmatching >= 0.8)
     scale_down: false # true: where the plant list exceeds the statistics, scale it down to them (otherwise the statistics only fill gaps)
     p_nom_min: 1 # any float, scales the minimum expansion acquired from stats, i.e. 110% of <years>'s capacities => p_nom_min: 1.1

@@ -478,13 +478,16 @@ def get_irena_targets_for_carrier(
     carrier: str,
     estimate_renewable_capacities_config: dict,
     countries: list,
+    statistics_fn: str = None,
 ) -> pd.Series:
     """
     Return IRENA installed capacity targets for a given carrier as a Series
     indexed by country (MW).
 
     The function reads IRENASTAT installed capacity data using the existing
-    `estimate_renewable_capacities` configuration.
+    `estimate_renewable_capacities` configuration, or, with ``stats: statistics``,
+    the table ``statistics_fn`` (country, technology, capacity_mw) with the same
+    technology names; a run that models a part of a country gives its share there.
     Offshore wind is mapped entirely to offwind-ac.
     """
     if not estimate_renewable_capacities_config:
@@ -494,23 +497,33 @@ def get_irena_targets_for_carrier(
     year = estimate_renewable_capacities_config.get("year")
     tech_map = estimate_renewable_capacities_config.get("technology_mapping", {})
 
-    if not stats or stats != "irena":
+    if not stats or stats not in ("irena", "statistics"):
         return pd.Series(dtype=float)
 
     if not countries or not tech_map:
         return pd.Series(dtype=float)
 
-    # Read IRENASTAT exactly as in the legacy implementation
-    capacities = pm.data.IRENASTAT().powerplant.convert_country_to_alpha2()
+    if stats == "statistics":
+        capacities = pd.read_csv(statistics_fn).rename(
+            columns={
+                "country": "Country",
+                "technology": "Technology",
+                "capacity_mw": "Capacity",
+            }
+        )
+    else:
+        # Read IRENASTAT exactly as in the legacy implementation
+        capacities = pm.data.IRENASTAT().powerplant.convert_country_to_alpha2()
+        capacities = capacities.query("Year == @year")
 
     missing = list(set(countries).difference(capacities.Country.unique()))
     if missing:
         logger.info(
-            f"The countries {missing} are not provided in the IRENA stats and hence not scaled"
+            f"The countries {missing} are not provided in the {stats} stats and hence not scaled"
         )
 
     capacities = capacities.query(
-        "Year == @year and Technology in @tech_map.keys() and Country in @countries"
+        "Technology in @tech_map.keys() and Country in @countries"
     )
 
     if capacities.empty:
@@ -680,6 +693,7 @@ def attach_wind_and_solar(
                 carrier=carrier,
                 estimate_renewable_capacities_config=estimate_cfg,
                 countries=countries,
+                statistics_fn=input_files.get("renewable_capacities"),
             )
 
             if not targets.empty:

@@ -828,6 +828,14 @@ rule add_electricity:
                     "hydro_max_hours.csv",
                     config["renewable"]["hydro"].get("hydro_max_hours") == "statistics",
                 ),
+                (
+                    "renewable_capacities",
+                    "renewable_capacities.csv",
+                    (config["electricity"].get("estimate_renewable_capacities") or {}).get(
+                        "stats"
+                    )
+                    == "statistics",
+                ),
             ]
             if on
         },
