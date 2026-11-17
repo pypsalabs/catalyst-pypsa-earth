@@ -728,10 +728,18 @@ rule build_powerplants:
         powerplants_lifetimes=config["electricity"].get(
             "powerplants_lifetimes", "powerplantmatching"
         ),
+        powerplants_within_shapes=config["electricity"].get(
+            "powerplants_within_shapes", False
+        ),
         fill_values=config["costs"]["fill_values"],
     input:
         base_network="networks/" + RDIR + "base.nc",
         pm_config="configs/powerplantmatching_config.yaml",
+        extended_country_shape=branch(
+            config["electricity"].get("powerplants_within_shapes", False) is not False,
+            "resources/" + RDIR + "shapes/extended_country_shape.geojson",
+            [],
+        ),
         tech_costs=branch(
             config["electricity"].get("powerplants_lifetimes") == "costs",
             "resources/" + RDIR + f"costs_{config['costs']['year']}_elec.csv",

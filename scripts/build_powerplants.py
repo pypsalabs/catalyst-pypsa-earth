@@ -505,6 +505,30 @@ def fill_decommissioning_years_from_costs(
     return ppl
 
 
+def drop_plants_outside_shapes(ppl, shapes_fn, tolerance_km):
+    """
+    Drop the power plants that lie outside the modelled area.
+
+    ``shapes_fn`` is the extended country shape of build_shapes (country and
+    offshore shapes). Without this step every plant of a modelled country is
+    assigned to its nearest bus, however far: the plants of a part of the country
+    that the shapes leave out (``build_shape_options: clip_bbox``, ``gadm_subset``)
+    would be stacked on the buses at the edge of the model.
+
+    Plants up to ``tolerance_km`` outside the shapes are kept (1 degree taken as
+    111 km): the simplified shapes leave out small islands, which are neither
+    land nor part of the offshore shape.
+    """
+    area = gpd.read_file(shapes_fn).geometry.union_all().buffer(tolerance_km / 111.0)
+    points = gpd.points_from_xy(ppl["lon"], ppl["lat"])
+    inside = pd.Series(points.within(area), index=ppl.index)
+    logger.info(
+        f"powerplants_within_shapes: dropped {int((~inside).sum())} of {len(ppl)} plants "
+        f"({ppl.loc[~inside, 'Capacity'].sum() / 1e3:.1f} GW) more than {tolerance_km} km outside the shapes"
+    )
+    return ppl[inside]
+
+
 def replace_natural_gas_technology(df: pd.DataFrame, mapping_update: dict = None):
     """
     Maps and replaces gas technologies in the powerplants.csv onto model
@@ -621,6 +645,12 @@ if __name__ == "__main__":
         replace_natural_gas_technology,
         snakemake.params.get("gas_technology_mapping"),
     )
+
+    within_shapes = snakemake.params.get("powerplants_within_shapes")
+    if within_shapes is not False and within_shapes is not None:
+        ppl = drop_plants_outside_shapes(
+            ppl, snakemake.input.extended_country_shape, float(within_shapes)
+        )
 
     statistics = snakemake.params.get("powerplants_statistics") or {}
     if statistics.get("enable"):
