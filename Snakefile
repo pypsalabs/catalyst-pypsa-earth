@@ -2712,6 +2712,13 @@ if config["foresight"] == "myopic":
             return STATISTICS + "market_zones.csv"
         return []
 
+    def cfe_shares(wildcards):
+        """Table of the buyers' share of demand per country, for the horizons with a 24/7 CFE buyer (catalyst: cfe: share: statistics)."""
+        cfe = (config.get("catalyst") or {}).get("cfe") or {}
+        if str(cfe.get("share")) == "statistics" and int(wildcards.planning_horizons) >= int(cfe.get("start_year", 0)):
+            return STATISTICS + "cfe_share_{planning_horizons}.csv"
+        return []
+
     rule add_brownfield_elec:
         params:
             threshold_capacity=config["existing_capacities"]["threshold_capacity"],
@@ -2725,6 +2732,7 @@ if config["foresight"] == "myopic":
             + RDIR
             + f"costs_{config['costs']['year']}_elec.csv",
             market_zones=cfe_market_zones,
+            cfe_shares=cfe_shares,
             **branch(
                 bool(config["load_options"].get("horizon_totals")),
                 {

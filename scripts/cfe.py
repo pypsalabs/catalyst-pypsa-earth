@@ -8,7 +8,9 @@ After the 24/7 CFE model of Riepin, Jenkins, Swezey & Brown (Joule 2025, github.
 ``add_ci``, ``cfe_constraints``, ``excess_constraints``, ``calculate_grid_cfe``), one buyer per AC bus with load:
 
 - a buyer bus ``<bus> CFE`` (location = the bus) with a flat load of ``share`` x the bus's mean load of the
-  horizon, taken out of the bus's own load;
+  horizon, taken out of the bus's own load; the share is one number for the network, or that of the bus's country
+  in the table statistics/cfe_share_<horizon>.csv (``share: statistics``; a bus whose country has share 0 gets no
+  buyer);
 - links ``<bus> CFE import`` (grid -> buyer) and ``<bus> CFE export`` (buyer -> grid), fixed and large; the
   import link is closed (``p_nom`` 0) unless ``grid_imports: true``: by default the buyer never buys from the
   grid, every hour of its load is met by its own assets (catalyst decision 2026-11-10);
@@ -42,7 +44,9 @@ CFE does not enter the problem and each horizon is solved once; it is still reco
 Config (``catalyst: cfe:``)::
 
     share: 0.10            # buyer load as a share of each bus's load; or a pathway {year: share}, interpolated
-                           # linearly between the given years (constant outside), e.g. {2030: 0.01, 2050: 0.10}
+                           # linearly between the given years (constant outside), e.g. {2030: 0.01, 2050: 0.10};
+                           # or `statistics` = per country from the table cfe_share_<horizon>.csv (columns
+                           # country, share)
     grid_imports: false    # true: the buyer may buy from the grid, credited with the grid's hourly clean share
                            # (247-cfe); false (default): no purchases from the grid, one solve per horizon
     target: 1.0            # CFE score (only binds with grid_imports: true)
@@ -100,17 +104,33 @@ def read_zones(path):
     return dict(zip(d["bus"], d["zone"]))
 
 
-def add_cfe_buyer(n, cfg, year, zones=None):
+def read_shares(path):
+    """{country: buyer share} of the table statistics/cfe_share_<horizon>.csv."""
+    d = pd.read_csv(path, keep_default_na=False)
+    return dict(zip(d["country"], d["share"].astype(float)))
+
+
+def add_cfe_buyer(n, cfg, year, zones=None, shares=None):
     """Add a buyer to every AC bus with load; returns the meta dict (or None before ``start_year``).
 
-    ``zones``: {bus: market zone} (``zones: statistics``); without it the zone of a bus is its country."""
+    ``zones``: {bus: market zone} (``zones: statistics``); without it the zone of a bus is its country.
+    ``shares``: {country: buyer share} of the horizon (``share: statistics``)."""
     if not cfg or year < int(cfg.get("start_year", 0)):
         return None
     clean = set(cfg.get("clean_carriers", []))
-    share = share_of(cfg, year)
     w = n.snapshot_weightings.generators
     load_bus = n.loads.bus
     nodes = [b for b in n.buses.index[n.buses.carrier == "AC"] if (load_bus == b).any()]
+    if str(cfg["share"]) == "statistics":
+        if shares is None:
+            raise ValueError("catalyst: cfe: share: statistics needs the table statistics/cfe_share_<horizon>.csv")
+        missing = sorted(set(n.buses.country[nodes]) - set(shares))
+        if missing:
+            raise ValueError(f"cfe_share_{year}.csv has no share for the countries {missing}")
+        share_at = {b: float(shares[n.buses.country[b]]) for b in nodes}
+    else:
+        share_at = dict.fromkeys(nodes, share_of(cfg, year))
+    nodes = [b for b in nodes if share_at[b] > 0]
     for c in ["CFE import", "CFE export"]:
         if c not in n.carriers.index:
             n.add("Carrier", c, co2_emissions=0.0)
@@ -118,7 +138,7 @@ def add_cfe_buyer(n, cfg, year, zones=None):
     matching = str(cfg.get("matching", "zone"))
     if matching not in ("node", "zone") or (matching == "zone" and grid_imports):
         raise ValueError("catalyst: cfe: matching is node or zone, and zone needs grid_imports: false")
-    meta = dict(buyers={}, share=share, target=float(cfg.get("target", 1.0)),
+    meta = dict(buyers={}, share=0.0, shares={}, target=float(cfg.get("target", 1.0)),
                 excess_share=float(cfg.get("excess_share", 0.0)), year=int(year), grid_imports=grid_imports,
                 matching=matching, zones={})
     if not grid_imports and meta["target"] < 1:
@@ -132,12 +152,15 @@ def add_cfe_buyer(n, cfg, year, zones=None):
             raise ValueError(f"market_zones.csv has no zone for the buses {missing} (table of another clustering?)")
     else:
         zones = None
+    total_flat = total_load = 0.0
     for b in nodes:
         buyer = f"{b}{SUFFIX}"
         loads = load_bus.index[load_bus == b]   # the bus's own loads (n.loads grows by one buyer load per node)
         p = n.loads_t.p_set[loads]
         mean_load = float((p.sum(axis=1) * w).sum() / w.sum())
+        share = share_at[b]
         flat = share * mean_load
+        total_flat, total_load = total_flat + flat, total_load + mean_load
         # flat buyer load out of the bus's own loads, in their proportion
         n.loads_t.p_set[loads] = p - p.div(p.sum(axis=1), axis=0).mul(flat, axis=0)
         bus = n.buses.loc[b]
@@ -192,10 +215,12 @@ def add_cfe_buyer(n, cfg, year, zones=None):
                         new["p_nom"] = 0.0
                         n.import_components_from_dataframe(new, "Link")
         meta["buyers"][buyer] = b
+        meta["shares"][buyer] = share
         meta["zones"][buyer] = str((zones or {}).get(b) or bus.get("country", "") or "all")
-        logger.info(f"CFE buyer {buyer}: {flat:.0f} MW flat ({share:.0%} of {mean_load:.0f} MW), "
+        logger.info(f"CFE buyer {buyer}: {flat:.0f} MW flat ({share:.1%} of {mean_load:.0f} MW), "
                     f"target {meta['target']}, excess <= {meta['excess_share']:.0%}, "
                     f"grid imports {'allowed' if grid_imports else 'closed'}, matching per {matching}")
+    meta["share"] = total_flat / total_load if total_load else 0.0   # of the load of the buses with a buyer
     return meta
 
 

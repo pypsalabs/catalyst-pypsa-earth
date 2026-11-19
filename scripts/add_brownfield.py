@@ -91,7 +91,7 @@ from add_existing_baseyear import (
     add_build_year_to_new_assets,
     rename_clashing_vintages,
 )
-from cfe import add_cfe_buyer, config_of, read_zones, seed_grid_cfe
+from cfe import add_cfe_buyer, config_of, read_shares, read_zones, seed_grid_cfe
 
 # from pypsa.clustering.spatial import normed_or_uniform
 
@@ -674,7 +674,9 @@ if __name__ == "__main__":
     # carried over, so that the buyer's earlier builds find their buses
     cfe_cfg = config_of(snakemake.config)
     cfe_zones = snakemake.input.get("market_zones")   # catalyst: cfe: zones: statistics
-    cfe_meta = add_cfe_buyer(n, cfe_cfg, year, read_zones(str(cfe_zones)) if cfe_zones else None)
+    cfe_shares = snakemake.input.get("cfe_shares")    # catalyst: cfe: share: statistics
+    cfe_meta = add_cfe_buyer(n, cfe_cfg, year, read_zones(str(cfe_zones)) if cfe_zones else None,
+                             read_shares(str(cfe_shares)) if cfe_shares else None)
 
     rename_clashing_vintages(n, snakemake.config["scenario"]["planning_horizons"])
 
