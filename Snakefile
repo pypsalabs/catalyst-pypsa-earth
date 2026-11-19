@@ -347,6 +347,8 @@ def retrieve_subregion(script_name):
 
     if method == "gadm":
         subregion_shapes = "resources/" + RDIR + "shapes/subregion_shapes.geojson"
+        # the subregions' own sea areas (build_shapes); with the countries' file no subregion finds an offshore shape
+        subregion_offshore = "resources/" + RDIR + "shapes/subregion_offshore.geojson"
     elif method == "custom":
         subregion_shapes = subregion_config["path_custom_shapes"]
         if subregion_config["path_custom_offshore"]:
