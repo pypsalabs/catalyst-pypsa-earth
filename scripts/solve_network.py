@@ -1362,10 +1362,12 @@ if __name__ == "__main__":
     if cfe_meta:
         n.meta["cfe"] = cfe_meta  # cfe.summary reads the buyer map from n.meta
         cfe_meta["summary"] = cfe.summary(n)
-        for b, v in cfe_meta["summary"].items():
-            logger.info(f"CFE {b}: score {v['cfe_score']:.4f}, {v['cost_per_mwh']:.1f} $/MWh vs grid "
-                        f"{v['grid_price_per_mwh']:.1f} (premium {v['premium_per_mwh']:.1f}), "
-                        f"excess {v['export_twh'] / v['demand_twh']:.1%}")
+        cfe_meta["summary_zones"] = cfe.summary_zones(n)   # the matching boundary: only these totals mean something
+        for z, v in cfe_meta["summary_zones"].items():
+            logger.info(f"CFE {z} ({v['n_buyers']} buyers): score {v['cfe_score']:.4f}, {v['cost_per_mwh']:.1f} $/MWh "
+                        f"vs grid {v['grid_price_per_mwh']:.1f} (premium {v['premium_per_mwh']:.1f}), "
+                        f"excess {v['export_twh'] / v['demand_twh']:.1%}, "
+                        f"matched across buses {v['transfer_twh'] / v['demand_twh']:.1%}")
     n.export_to_netcdf(snakemake.output[0])
     logger.info(f"Objective function: {n.objective}")
     logger.info(f"Objective constant: {n.objective_constant}")

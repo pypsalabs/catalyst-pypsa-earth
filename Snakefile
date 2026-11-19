@@ -2699,6 +2699,17 @@ if config["foresight"] == "myopic":
         # technology costs of new assets built in the planning horizon
         return "resources/" + RDIR + "costs_{planning_horizons}_elec.csv"
 
+    def cfe_market_zones(wildcards):
+        """Table of the market zones of the buses, for the horizons with a 24/7 CFE buyer (catalyst: cfe: zones)."""
+        cfe = (config.get("catalyst") or {}).get("cfe") or {}
+        if (
+            cfe.get("share")
+            and cfe.get("zones", "country") == "statistics"
+            and int(wildcards.planning_horizons) >= int(cfe.get("start_year", 0))
+        ):
+            return STATISTICS + "market_zones.csv"
+        return []
+
     rule add_brownfield_elec:
         params:
             threshold_capacity=config["existing_capacities"]["threshold_capacity"],
@@ -2711,6 +2722,7 @@ if config["foresight"] == "myopic":
             costs_base="resources/"
             + RDIR
             + f"costs_{config['costs']['year']}_elec.csv",
+            market_zones=cfe_market_zones,
             **branch(
                 bool(config["load_options"].get("horizon_totals")),
                 {

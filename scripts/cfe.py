@@ -23,12 +23,16 @@ After the 24/7 CFE model of Riepin, Jenkins, Swezey & Brown (Joule 2025, github.
 - the excess limit sum_t w_t export_t <= excess_share * sum_t w_t load_t;
 - shared potentials: a buyer copy and its grid twin together stay within the twin's potential (``p_nom_max``).
 
-``matching: zone`` (2026-11-11; default ``node``) widens the matching boundary from the bus to the zone (the
-country of the bus), the way 24/7 CFE accounting is done within a bidding zone: every buyer still sits at its bus
-and procures there, but its import link is open and the buyers of a zone are matched together, in every hour
-sum_buyers export_t >= sum_buyers import_t, so the wind a buyer contracts at one bus may cover the load of a buyer
-at another. The power itself goes through the grid and its line limits like any other. The excess limit then
-holds for the zone's net exports. On a one-bus zone this is the same as ``node``.
+``matching: zone`` (the default) is how 24/7 CFE accounting is done: within a market zone. Every buyer still sits
+at its bus and procures there, but its import link is open and the buyers of a zone are matched together, in every
+hour sum_buyers export_t >= sum_buyers import_t, so the wind a buyer contracts at one bus may cover the load of a
+buyer at another. The power itself goes through the grid and its line limits like any other. The excess limit then
+holds for the zone's net exports. On a one-bus zone this is the same as ``node`` (every buyer covers its load at
+its own bus, import link closed), which is stricter than the accounting wherever a market has several buses.
+
+The zone of a bus (``zones``): its country (``country``, the default), or the market zone listed for it in the
+table statistics/market_zones.csv (``statistics``; columns bus, zone; one row per clustered bus), for markets that
+are smaller than a country (the US ISOs, Brazil's submarkets, China's provinces) or larger (Germany and Luxembourg).
 
 grid_cfe_t is the clean share of the generation at the bus (the buyer's assets and pure storage left out),
 computed outside the LP from a solved network: the previous horizon's network seeds the first solve, every
@@ -43,8 +47,9 @@ Config (``catalyst: cfe:``)::
                            # (247-cfe); false (default): no purchases from the grid, one solve per horizon
     target: 1.0            # CFE score (only binds with grid_imports: true)
     excess_share: 0.20     # exports as a share of the buyer's load
-    matching: node         # node: every buyer covers its load at its own bus; zone: the buyers of a country are
-                           # matched together hour by hour (needs grid_imports: false)
+    matching: zone         # zone (default): the buyers of a market zone are matched together hour by hour (needs
+                           # grid_imports: false); node: every buyer covers its load at its own bus
+    zones: country         # the zone of a bus: its country, or `statistics` = the table market_zones.csv
     start_year: 2030       # first planning horizon with a buyer (the dispatch-only horizons cannot procure)
     iterations: 2          # solves per horizon with grid_imports: true
     clean_carriers: [...]  # what the buyer may build; also the clean carriers of grid_cfe
@@ -89,8 +94,16 @@ def _rename(index, bus):
     return pd.Index([f"{bus}{SUFFIX}{i[len(bus):]}" if i.startswith(bus) else f"{bus}{SUFFIX} {i}" for i in index])
 
 
-def add_cfe_buyer(n, cfg, year):
-    """Add a buyer to every AC bus with load; returns the meta dict (or None before ``start_year``)."""
+def read_zones(path):
+    """{clustered bus: market zone} of the table statistics/market_zones.csv."""
+    d = pd.read_csv(path, dtype=str)
+    return dict(zip(d["bus"], d["zone"]))
+
+
+def add_cfe_buyer(n, cfg, year, zones=None):
+    """Add a buyer to every AC bus with load; returns the meta dict (or None before ``start_year``).
+
+    ``zones``: {bus: market zone} (``zones: statistics``); without it the zone of a bus is its country."""
     if not cfg or year < int(cfg.get("start_year", 0)):
         return None
     clean = set(cfg.get("clean_carriers", []))
@@ -102,7 +115,7 @@ def add_cfe_buyer(n, cfg, year):
         if c not in n.carriers.index:
             n.add("Carrier", c, co2_emissions=0.0)
     grid_imports = bool(cfg.get("grid_imports", False))
-    matching = str(cfg.get("matching", "node"))
+    matching = str(cfg.get("matching", "zone"))
     if matching not in ("node", "zone") or (matching == "zone" and grid_imports):
         raise ValueError("catalyst: cfe: matching is node or zone, and zone needs grid_imports: false")
     meta = dict(buyers={}, share=share, target=float(cfg.get("target", 1.0)),
@@ -111,6 +124,14 @@ def add_cfe_buyer(n, cfg, year):
     if not grid_imports and meta["target"] < 1:
         logger.warning(f"CFE target {meta['target']} has no effect without grid imports (catalyst: cfe: "
                        "grid_imports: false): the buyer's own assets cover every hour")
+    if str(cfg.get("zones", "country")) == "statistics":
+        if zones is None:
+            raise ValueError("catalyst: cfe: zones: statistics needs the table statistics/market_zones.csv")
+        missing = [b for b in nodes if b not in zones]
+        if missing:
+            raise ValueError(f"market_zones.csv has no zone for the buses {missing} (table of another clustering?)")
+    else:
+        zones = None
     for b in nodes:
         buyer = f"{b}{SUFFIX}"
         loads = load_bus.index[load_bus == b]   # the bus's own loads (n.loads grows by one buyer load per node)
@@ -171,7 +192,7 @@ def add_cfe_buyer(n, cfg, year):
                         new["p_nom"] = 0.0
                         n.import_components_from_dataframe(new, "Link")
         meta["buyers"][buyer] = b
-        meta["zones"][buyer] = str(bus.get("country", "") or "all")
+        meta["zones"][buyer] = str((zones or {}).get(b) or bus.get("country", "") or "all")
         logger.info(f"CFE buyer {buyer}: {flat:.0f} MW flat ({share:.0%} of {mean_load:.0f} MW), "
                     f"target {meta['target']}, excess <= {meta['excess_share']:.0%}, "
                     f"grid imports {'allowed' if grid_imports else 'closed'}, matching per {matching}")
@@ -267,7 +288,11 @@ def add_cfe_constraints(n):
 
 
 def summary(n):
-    """Per buyer: achieved CFE score, costs per MWh (USD of the cost table), the grid's average price."""
+    """Per buyer: achieved CFE score, costs per MWh (USD of the cost table), the grid's average price.
+
+    Under zone matching a buyer's imports are another buyer's exports, priced at each one's bus: a single buyer's
+    cost then contains what it pays to or receives from the others of its zone, and only ``summary_zones`` means
+    something."""
     meta = (n.meta or {}).get("cfe") or {}
     w = n.snapshot_weightings.generators
     out = {}
@@ -311,12 +336,70 @@ def summary(n):
         if meta.get("matching", "node") == "zone":
             score = 1.0   # matched hour by hour over the zone; a buyer's imports are another buyer's clean exports
         out[buyer] = dict(
-            bus=b, demand_twh=demand / 1e6, cfe_score=score, grid_cfe_mean=float((cfe * w).sum() / w.sum()),
+            bus=b, zone=_zone_of(meta, buyer), demand_twh=demand / 1e6, cfe_score=score, grid_cfe_mean=float((cfe * w).sum() / w.sum()),
             import_twh=float((imp * w).sum()) / 1e6, export_twh=float((exp * w).sum()) / 1e6,
             cost_own_per_mwh=own / demand, cost_imports_per_mwh=imports / demand, revenue_per_mwh=revenue / demand,
             cost_per_mwh=(own + imports - revenue) / demand, grid_price_per_mwh=grid_price,
             premium_per_mwh=(own + imports - revenue) / demand - grid_price,
             cost_own_new=own_new,   # USD/a: annuity + running cost of the buyer assets built in this horizon
             cost_by_carrier_per_mwh={k: v / demand for k, v in cost.items()},
+        )
+    return out
+
+
+def _zone_of(meta, buyer):
+    """Matching boundary of a buyer: its market zone, or its own bus under node matching."""
+    if meta.get("matching", "node") == "zone":
+        return (meta.get("zones") or {}).get(buyer) or "all"
+    return meta["buyers"][buyer]
+
+
+def summary_zones(n, buyers=None):
+    """Per matching boundary (market zone; the buyer's bus under node matching): what the buyers pay together.
+
+    Within a zone only the totals mean something: ``transfer_twh`` is the energy matched across the zone's buses
+    (the sum of the buyers' imports), ``export_twh`` the zone's net sales to the grid. The settlement with the grid,
+    sum over buyers of (import - export) x the price at the buyer's bus, is split into ``revenue_per_mwh`` (the net
+    sales at the zone's price) and ``congestion_per_mwh`` (the rest: what moving power between the zone's buses
+    costs at nodal prices). ``grid_price_per_mwh`` is the load-weighted price of the rest of the zone's demand.
+    The demand-weighted cost over the zones equals that over the buyers of ``summary``.
+    """
+    meta = (n.meta or {}).get("cfe") or {}
+    if not meta.get("buyers"):
+        return {}
+    buyers = buyers or meta.get("summary") or summary(n)
+    w = n.snapshot_weightings.generators
+    zones = {}
+    for buyer in meta["buyers"]:
+        zones.setdefault(_zone_of(meta, buyer), []).append(buyer)
+    out = {}
+    for z, bs in zones.items():
+        grid = [meta["buyers"][x] for x in bs]
+        demand = sum(buyers[x]["demand_twh"] for x in bs) * 1e6
+        imp = n.links_t.p0[[f"{x} import" for x in bs]].set_axis(grid, axis=1)
+        exp = n.links_t.p0[[f"{x} export" for x in bs]].set_axis(grid, axis=1)
+        price = n.buses_t.marginal_price[grid]
+        loads = n.loads.index[n.loads.bus.isin(grid)]
+        load = n.loads_t.p_set[loads].T.groupby(n.loads.bus[loads]).sum().T.reindex(columns=grid)
+        zone_price = (load * price).sum(axis=1) / load.sum(axis=1)
+        net = (exp - imp).sum(axis=1)
+        settlement = float((((imp - exp) * price).sum(axis=1) * w).sum())   # > 0: the zone pays the grid
+        revenue = float((net * zone_price * w).sum())
+        own = sum(buyers[x]["cost_own_per_mwh"] * buyers[x]["demand_twh"] * 1e6 for x in bs)
+        carriers = {}
+        for x in bs:
+            for k, v in buyers[x]["cost_by_carrier_per_mwh"].items():
+                carriers[k] = carriers.get(k, 0.0) + v * buyers[x]["demand_twh"] * 1e6
+        grid_price = float((load.sum(axis=1) * zone_price * w).sum() / (load.sum(axis=1) * w).sum())
+        cost = (own + settlement) / demand
+        out[z] = dict(
+            n_buyers=len(bs), demand_twh=demand / 1e6,
+            transfer_twh=float((imp.sum(axis=1) * w).sum()) / 1e6, export_twh=float((net * w).sum()) / 1e6,
+            cfe_score=1 - float((net.clip(upper=0).abs() * w).sum()) / demand,   # hours of net purchase from the grid
+            cost_own_per_mwh=own / demand, revenue_per_mwh=revenue / demand,
+            congestion_per_mwh=(settlement + revenue) / demand, cost_per_mwh=cost,
+            grid_price_per_mwh=grid_price, premium_per_mwh=cost - grid_price,
+            cost_own_new=sum(buyers[x]["cost_own_new"] for x in bs),
+            cost_by_carrier_per_mwh={k: v / demand for k, v in carriers.items()},
         )
     return out
