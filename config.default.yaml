@@ -315,6 +315,10 @@ lines:
   # loading. The usable share of a clustered line (s_max_pu) is multiplied by the sum of these limits over the circuits
   # between its two clusters divided by the sum of their thermal ratings
   loadability: false
+  # add_brownfield, prepare_network: limit on the growth of the transmission volume (capacity x length of AC lines and DC
+  # links together) on top of `ll`: {rate: 0.01, reference_year: 2024} lets the grid of a planning horizon be at most
+  # (1 + rate)^(horizon - reference_year) times the existing one; a single-step run takes `year` instead of the horizon
+  expansion_limit: false
   s_nom_max: .inf
   s_nom_max_min: -.inf
   length_factor: 1.25

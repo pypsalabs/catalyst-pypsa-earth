@@ -2391,6 +2391,44 @@ def sanitize_carriers(n: pypsa.Network, config: dict) -> None:
     n.carriers["color"] = n.carriers.color.where(n.carriers.color != "", colors)
 
 
+def set_transmission_expansion_limit(n, rate, reference_year, year):
+    """
+    Limit the transmission volume to the existing grid grown at a rate per year.
+
+    The volume is the sum of capacity x length (MW km) over the extendable AC
+    lines and DC links. Its limit in ``year`` is the volume of the existing grid
+    (``s_nom``, ``p_nom``) times ``(1 + rate) ** (year - reference_year)``. It is
+    set as the global constraint ``lv_limit`` of type
+    ``transmission_volume_expansion_limit``, which PyPSA enforces on the sum over
+    all lines and links, so the optimisation chooses where the grid grows. An
+    ``lv_limit`` from the ``ll`` wildcard is replaced.
+    """
+    lines = n.lines.index[n.lines.s_nom_extendable]
+    links = n.links.index[(n.links.carrier == "DC") & n.links.p_nom_extendable]
+    reference = (
+        n.lines.s_nom[lines] @ n.lines.length[lines]
+        + n.links.p_nom[links] @ n.links.length[links]
+    )
+    if reference == 0:
+        return None
+    factor = (1 + rate) ** max(year - reference_year, 0)
+    if "lv_limit" in n.global_constraints.index:
+        n.remove("GlobalConstraint", "lv_limit")
+    n.add(
+        "GlobalConstraint",
+        "lv_limit",
+        type="transmission_volume_expansion_limit",
+        sense="<=",
+        constant=factor * reference,
+        carrier_attribute="AC, DC",
+    )
+    logger.info(
+        f"Transmission volume of {year} limited to {factor:.3f} x the existing "
+        f"{reference / 1e6:.1f} TW km ({rate:.1%} per year from {reference_year})"
+    )
+    return factor
+
+
 def sanitize_locations(n: pypsa.Network) -> None:
     """
     Fill missing bus coordinates and country codes from the ``location`` mapping.

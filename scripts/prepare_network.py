@@ -69,6 +69,7 @@ from _helpers import (
     create_logger,
     sanitize_carriers,
     sanitize_locations,
+    set_transmission_expansion_limit,
 )
 from add_electricity import update_transmission_costs
 
@@ -603,6 +604,14 @@ if __name__ == "__main__":
     lines = snakemake.params.lines
     links = snakemake.params.links
     set_transmission_limit(n, ll_type, factor, costs, lines, links)
+
+    limit = lines.get("expansion_limit") or {}
+    if limit.get("rate") is not None and limit.get("year") is not None:
+        # a single-step run of a later year; the myopic workflow sets the limit of
+        # every planning horizon in add_brownfield
+        set_transmission_expansion_limit(
+            n, limit["rate"], limit.get("reference_year", limit["year"]), limit["year"]
+        )
 
     if "ATK" in opts:
         enforce_autarky(n)

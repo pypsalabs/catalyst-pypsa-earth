@@ -86,6 +86,7 @@ from _helpers import (
     read_csv_nafix,
     sanitize_carriers,
     sanitize_locations,
+    set_transmission_expansion_limit,
 )
 from add_existing_baseyear import (
     add_build_year_to_new_assets,
@@ -699,6 +700,13 @@ if __name__ == "__main__":
         add_brownfield(n, n_p, year, sector_coupled=is_sector_coupled)
 
         disable_grid_expansion_if_limit_hit(n)
+
+    limit = snakemake.config["lines"].get("expansion_limit") or {}
+    if limit.get("rate") is not None:
+        # the grid of this horizon: the existing one grown at a rate per year
+        set_transmission_expansion_limit(
+            n, limit["rate"], limit.get("reference_year", year), year
+        )
 
     if year in snakemake.config["existing_capacities"].get(
         "dispatch_only_horizons", []
