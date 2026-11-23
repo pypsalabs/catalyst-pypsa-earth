@@ -713,6 +713,8 @@ def attach_wind_and_solar(
                             f"{carrier} {country}: plant list scaled to the statistics (x{f:.2f})"
                         )
                     existing_by_country = caps_existing.groupby(buses_country).sum()
+                    # the generators take the scaled list, with the gaps filled below
+                    caps_final = caps_existing.copy()
                 gap_by_country = targets.sub(existing_by_country, fill_value=0.0).clip(
                     lower=0.0
                 )
