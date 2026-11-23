@@ -319,6 +319,35 @@ def scale_to_annual_totals(el_load, fn, start_date, end_date):
     return el_load
 
 
+def subnational_factors(transfer, units, shares, default):
+    """
+    Share of a country's load per bus region, with the load of the administrative
+    units given by a table.
+
+    ``transfer`` (bus regions x units) holds the share of every unit's area that
+    lies in a bus region. A unit with a row in ``shares`` (index: GADM id) gets that
+    share of the country's load; units without a row keep their ``default`` weight
+    (the one from GDP and population) and the table's shares are scaled to what
+    is left. Inside a unit the load follows ``transfer``, as without the table. A
+    unit that no bus region touches cannot take load; its share goes to the others.
+    """
+    weight = pd.Series(default, index=units, dtype=float)
+    given = weight.index.isin(shares.index)
+    table = shares.reindex(weight.index[given]).astype(float)
+    weight[given] = table / table.sum() * (1.0 - weight[~given].sum())
+    covered = np.asarray(transfer.sum(axis=0)).ravel()
+    lost = weight.index[(covered == 0) & (weight > 0)]
+    if len(lost):
+        logger.warning(
+            f"subnational_shares: no bus region touches {list(lost)}; "
+            f"{weight[lost].sum():.2%} of the load is spread over the other units"
+        )
+    per_unit = np.divide(
+        weight.values, covered, out=np.zeros(len(weight)), where=covered > 0
+    )
+    return normed(pd.Series(transfer.dot(per_unit)))
+
+
 def build_demand_profiles(
     n,
     load_source,
@@ -333,6 +362,7 @@ def build_demand_profiles(
     out_path,
     fallback_path=None,
     annual_totals=None,
+    subnational_shares=None,
 ):
     """
     Create csv file of electric demand time series.
@@ -362,6 +392,11 @@ def build_demand_profiles(
     annual_totals: str, optional
         csv with the annual demand per country (``load_options.annual_totals``),
         see ``scale_to_annual_totals``
+    subnational_shares: str, optional
+        csv with the share of a country's demand per GADM unit
+        (``load_options.subnational_shares``; columns ``key``, ``country``,
+        ``share``), see ``subnational_factors``. Countries without rows are
+        distributed by GDP and population.
 
     Returns
     -------
@@ -429,6 +464,10 @@ def build_demand_profiles(
     shapes = gpd.read_file(admin_shapes).set_index("GADM_ID")
     shapes["geometry"] = shapes["geometry"].apply(lambda x: make_valid(x))
 
+    shares = pd.DataFrame(columns=["country", "share"])
+    if subnational_shares:
+        shares = pd.read_csv(subnational_shares, comment="#").set_index("key")
+
     def upsample(cntry, group):
         """
         Distributes load in country according to population and gdp.
@@ -461,6 +500,21 @@ def build_demand_profiles(
             # (refer to vresutils.load._upsampling_weights)
             # TODO: require adjustment for Africa
             factors = normed(0.6 * normed(gdp_n) + 0.4 * normed(pop_n))
+            shares_cntry = shares.loc[shares.country == cntry, "share"]
+            if len(shares_cntry):
+                gdp = shapes_cntry["gdp"] if "gdp" in shapes_cntry else shapes_cntry["pop"]
+                default = 0.6 * normed(gdp.fillna(1.0)) + 0.4 * normed(
+                    shapes_cntry["pop"].fillna(1.0)
+                )
+                factors = subnational_factors(
+                    transfer, shapes_cntry.index, shares_cntry, default.values
+                )
+                factors.index = group.index
+                logger.info(
+                    f"Load of {cntry} distributed with the shares of "
+                    f"{shares_cntry.index.isin(shapes_cntry.index).sum()} of "
+                    f"{len(shapes_cntry)} administrative units"
+                )
             if factors.sum() == 0:
                 logger.warning(
                     f"Upsampling factors for {cntry} are all zero, returning uniform distribution across {len(factors)} shapes."
@@ -532,4 +586,5 @@ if __name__ == "__main__":
         out_path,
         fallback_path=snakemake.input.get("fallback"),
         annual_totals=snakemake.input.get("annual_totals"),
+        subnational_shares=snakemake.input.get("subnational_shares"),
     )

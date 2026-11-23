@@ -627,6 +627,11 @@ rule build_demand_profiles:
             STATISTICS + "demand.csv",
             [],
         ),
+        subnational_shares=branch(
+            enabled(config["load_options"].get("subnational_shares")),
+            STATISTICS + "demand_shares.csv",
+            [],
+        ),
         #gadm_shapes="resources/" + RDIR + "shapes/MAR2.geojson",
         #using this line instead of the following will test updated gadm shapes for MA.
         #To use: downlaod file from the google drive and place it in resources/" + RDIR + "shapes/

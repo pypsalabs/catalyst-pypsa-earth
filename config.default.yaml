@@ -196,6 +196,7 @@ load_options:
   scale: 1 # scales all load time-series, i.e. 2 = doubles load
   fallback_source: false # "demcast": countries without load in `source` (e.g. gegis has none for HK, PR, LA, BT) take the DemandCast series of weather_year
   annual_totals: false # true: each country's load is scaled to the annual demand of statistics/demand.csv (country, demand_twh; row "*" = default) before it is distributed to the buses
+  subnational_shares: false # true: inside a country the load is split over the GADM units with the shares of statistics/demand_shares.csv (key = GADM id, country, share) instead of 0.6 x GDP + 0.4 x population; countries and units without a row are distributed as before
   horizon_totals: false # true (myopic): demand profiles per planning horizon scaled to statistics/demand_<planning horizon>.csv; add_brownfield_elec replaces the loads with them
 
 # Options that take a table of statistics are switches: the rules read the table from resources/<run>/statistics/
