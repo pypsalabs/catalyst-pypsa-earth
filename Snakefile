@@ -632,6 +632,11 @@ rule build_demand_profiles:
             STATISTICS + "demand_shares.csv",
             [],
         ),
+        time_shift=branch(
+            enabled(config["load_options"].get("time_shift")),
+            STATISTICS + "demand_shift.csv",
+            [],
+        ),
         #gadm_shapes="resources/" + RDIR + "shapes/MAR2.geojson",
         #using this line instead of the following will test updated gadm shapes for MA.
         #To use: downlaod file from the google drive and place it in resources/" + RDIR + "shapes/

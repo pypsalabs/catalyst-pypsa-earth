@@ -319,6 +319,32 @@ def scale_to_annual_totals(el_load, fn, start_date, end_date):
     return el_load
 
 
+def shift_in_time(el_load, fn):
+    """
+    Shift a country's hourly load series in time by the hours of a table.
+
+    The table (``load_options.time_shift``) has the columns ``country`` and
+    ``shift_hours``: a positive value moves the series later, so that the load of
+    hour t becomes that of hour t - shift. Fractions of an hour are interpolated
+    linearly, and the series wraps around at its ends, so its sum is kept. It
+    serves a run that models a part of a country whose load runs earlier or later
+    than the national series (another time zone).
+    """
+    shifts = pd.read_csv(fn, comment="#").set_index("country")["shift_hours"]
+    for country, hours in shifts.astype(float).items():
+        rows = el_load.region_code == country
+        if not rows.any() or hours == 0:
+            continue
+        values = el_load.loc[rows, "Electricity demand"].to_numpy(dtype=float)
+        whole = int(np.floor(hours))
+        part = hours - whole
+        el_load.loc[rows, "Electricity demand"] = (1 - part) * np.roll(
+            values, whole
+        ) + part * np.roll(values, whole + 1)
+        logger.info(f"time_shift {country}: load series moved {hours:+.2f} h")
+    return el_load
+
+
 def subnational_factors(transfer, units, shares, default):
     """
     Share of a country's load per bus region, with the load of the administrative
@@ -363,6 +389,7 @@ def build_demand_profiles(
     fallback_path=None,
     annual_totals=None,
     subnational_shares=None,
+    time_shift=None,
 ):
     """
     Create csv file of electric demand time series.
@@ -392,6 +419,9 @@ def build_demand_profiles(
     annual_totals: str, optional
         csv with the annual demand per country (``load_options.annual_totals``),
         see ``scale_to_annual_totals``
+    time_shift: str, optional
+        csv with the hours by which a country's load series is moved in time
+        (``load_options.time_shift``), see ``shift_in_time``
     subnational_shares: str, optional
         csv with the share of a country's demand per GADM unit
         (``load_options.subnational_shares``; columns ``key``, ``country``,
@@ -457,6 +487,9 @@ def build_demand_profiles(
     elif isinstance(scale, (int, float)):
         logger.info(f"Load data scaled with scaling factor {scale}.")
         el_load["Electricity demand"] *= scale
+
+    if time_shift:
+        el_load = shift_in_time(el_load, time_shift)
 
     if annual_totals:
         el_load = scale_to_annual_totals(el_load, annual_totals, start_date, end_date)
@@ -587,4 +620,5 @@ if __name__ == "__main__":
         fallback_path=snakemake.input.get("fallback"),
         annual_totals=snakemake.input.get("annual_totals"),
         subnational_shares=snakemake.input.get("subnational_shares"),
+        time_shift=snakemake.input.get("time_shift"),
     )
