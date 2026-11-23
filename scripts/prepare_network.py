@@ -11,6 +11,7 @@ as.
 - adding an annual **limit** of carbon-dioxide emissions,
 - adding an exogenous **price** per tonne emissions of carbon-dioxide (or other kinds),
 - setting an **N-1 security margin** factor for transmission line capacities,
+- limiting long lines by their **loadability** (``lines: loadability``),
 - specifying an expansion limit on the **cost** of transmission expansion,
 - specifying an expansion limit on the **volume** of transmission expansion, and
 - reducing the **temporal** resolution by averaging over multiple hours
@@ -204,6 +205,127 @@ def set_line_s_max_pu(n, s_max_pu):
     logger.info(f"N-1 security margin of lines set to {s_max_pu}")
 
 
+# St. Clair's loadability curve of overhead lines without compensation: line length
+# in miles, load in multiples of the surge impedance loading (SIL). 3.0 SIL at 50
+# miles and 1.0 SIL at 300 miles are its two benchmark points (St. Clair 1953, AIEE
+# Transactions 72, 1152-1157); the points between and beyond are read off the curve
+# as reproduced in Sekhon 1981 (MSc thesis, University of Manitoba, Fig. 3.1.1).
+ST_CLAIR = [
+    (50, 3.0),
+    (75, 2.45),
+    (100, 2.05),
+    (150, 1.6),
+    (200, 1.35),
+    (250, 1.15),
+    (300, 1.0),
+    (400, 0.8),
+    (500, 0.7),
+    (600, 0.62),
+]
+
+
+def st_clair(length_km, curve=ST_CLAIR):
+    """
+    Loadability in multiples of SIL of a line of the given length: the curve
+    interpolated between its points on logarithmic axes and continued with its
+    first slope below its first point and with its last slope beyond its last.
+    """
+    miles, k = np.log(np.array(curve, dtype=float)).T
+    x = np.log(np.maximum(np.asarray(length_km, dtype=float) / 1.609344, 1e-9))
+    below = k[0] + (k[1] - k[0]) / (miles[1] - miles[0]) * (x - miles[0])
+    beyond = k[-1] + (k[-1] - k[-2]) / (miles[-1] - miles[-2]) * (x - miles[-1])
+    inside = np.interp(x, miles, k)
+    k = np.where(x < miles[0], below, np.where(x > miles[-1], beyond, inside))
+    return np.exp(k)
+
+
+def set_line_loadability(n, base, busmaps, curve=ST_CLAIR):
+    """
+    Limit long AC circuits by their loadability instead of their thermal rating.
+
+    A line's capacity ``s_nom`` is the thermal rating of its conductors, whatever
+    its length. A long line is limited earlier, by voltage drop and by angle
+    stability. Each AC circuit of the base network, where every circuit still has
+    its own length, voltage and line type, is limited to
+    ``min(thermal, k(L) * SIL)``:
+
+    - ``thermal`` is its ``s_nom`` and ``SIL = v_nom^2 / sqrt(x / (omega c))``
+      per circuit its surge impedance loading;
+    - ``k(L)`` is the loadability curve (:func:`st_clair`) at its length.
+
+    The usable share ``s_max_pu`` of a clustered line is multiplied by the sum of
+    these limits over the circuits between its two clusters (``busmaps``: base
+    bus to simplified bus to cluster), divided by the sum of their thermal
+    ratings. The length of the clustered line itself, the distance between two
+    cluster centres, does not enter, so the result does not depend on the number
+    of clusters. The security margin set before (``lines: s_max_pu``) so applies
+    to whichever limit binds. Capacity added to a line by the optimisation is
+    limited alike. HVDC links are not touched. Returns one row per clustered AC
+    line.
+    """
+    ac = n.lines.index[n.lines.carrier != "DC"]
+    if ac.empty:
+        return pd.DataFrame()
+
+    types = base.line_types
+    surge_impedance = np.sqrt(
+        types.x_per_length / (2 * np.pi * types.f_nom * types.c_per_length * 1e-9)
+    )
+    circuits = base.lines[(base.lines.carrier != "DC") & (base.lines.s_nom > 0)]
+    sil = (
+        circuits.v_nom**2
+        / circuits["type"].map(surge_impedance)
+        * circuits.num_parallel
+    )
+    loadable = np.minimum(circuits.s_nom, st_clair(circuits.length, curve) * sil)
+    cluster = pd.Series(base.buses.index, base.buses.index)
+    for busmap in busmaps:
+        cluster = cluster.map(busmap.astype(str).rename(index=str))
+    ends = pd.DataFrame(
+        {"bus0": circuits.bus0.map(cluster), "bus1": circuits.bus1.map(cluster)}
+    ).dropna()
+    ends = ends[ends.bus0 != ends.bus1]
+    pair = ends.min(axis=1) + " " + ends.max(axis=1)
+    sums = (
+        pd.DataFrame(
+            {
+                "thermal": circuits.s_nom,
+                "sil": sil,
+                "loadable": loadable,
+                "km": circuits.length * circuits.s_nom,
+            }
+        )
+        .groupby(pair)
+        .sum()
+    )
+
+    df = pd.DataFrame({"length": n.lines.length[ac], "s_nom": n.lines.s_nom[ac]})
+    pair = n.lines.loc[ac, ["bus0", "bus1"]]
+    pair = pair.min(axis=1) + " " + pair.max(axis=1)
+    for col in ["thermal", "sil", "loadable"]:
+        df[col] = pair.map(sums[col])
+    df["circuit_length"] = pair.map(sums.km / sums.thermal)
+    # a line without circuits between its clusters in the base network (a
+    # transformer kept as a line) takes the share of all circuits between clusters
+    df["factor"] = (df.loadable / df.thermal).fillna(
+        sums.loadable.sum() / sums.thermal.sum() if len(sums) else 1.0
+    )
+    before = n.lines.s_max_pu[ac]
+    n.lines.loc[ac, "s_max_pu"] = before * df.factor
+    df["s_max_pu"] = n.lines.s_max_pu[ac]
+
+    logger.info(
+        f"Loadability of {len(ac)} AC lines: {(df.factor < 1).sum()} with circuits "
+        f"limited below their thermal rating, {df.thermal.notna().sum()} with "
+        f"circuits between their clusters in the base network; s_max_pu "
+        f"{df.s_max_pu.min():.2f} to {df.s_max_pu.max():.2f} (median "
+        f"{df.s_max_pu.median():.2f}); sum of line limits "
+        f"{(before * df.s_nom).sum() / 1e3:.0f} GW -> "
+        f"{(df.s_max_pu * df.s_nom).sum() / 1e3:.0f} GW"
+    )
+    return df
+
+
 def set_transmission_limit(n, ll_type, factor, costs, lines, links):
     links_dc_b = n.links.carrier == "DC" if not n.links.empty else pd.Series()
 
@@ -385,6 +507,15 @@ if __name__ == "__main__":
         calibration_targets = calibrate(n, costs, calibration, tables)
 
     set_line_s_max_pu(n, s_max_pu)
+    if snakemake.input.get("base_network"):
+        set_line_loadability(
+            n,
+            pypsa.Network(snakemake.input.base_network),
+            [
+                pd.read_csv(fn, index_col=0, dtype=str).squeeze("columns")
+                for fn in snakemake.input.busmaps
+            ],
+        )
 
     for o in opts:
         m = re.match(r"^\d+h$", o, re.IGNORECASE)

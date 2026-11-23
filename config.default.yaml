@@ -308,6 +308,11 @@ lines:
   dc_types:
     500.: "HVDC XLPE 1000"
   s_max_pu: 0.7
+  # prepare_network: limit long AC circuits by their loadability where it is below their thermal rating. Each circuit of
+  # the base network carries min(thermal rating, k x SIL): k = St. Clair's curve at its length, SIL = surge impedance
+  # loading. The usable share of a clustered line (s_max_pu) is multiplied by the sum of these limits over the circuits
+  # between its two clusters divided by the sum of their thermal ratings
+  loadability: false
   s_nom_max: .inf
   s_nom_max_min: -.inf
   length_factor: 1.25

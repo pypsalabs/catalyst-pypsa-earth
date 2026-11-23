@@ -1223,6 +1223,19 @@ rule prepare_network:
             {"co2_prices": STATISTICS + "co2_prices.csv"},
             {},
         ),
+        **branch(
+            enabled(config["lines"].get("loadability")),
+            {
+                "base_network": "networks/" + RDIR + "base.nc",
+                "busmaps": [
+                    "resources/" + RDIR + "bus_regions/busmap_elec_s{simpl}.csv",
+                    "resources/"
+                    + RDIR
+                    + "bus_regions/busmap_elec_s{simpl}_{clusters}.csv",
+                ],
+            },
+            {},
+        ),
         tech_costs="resources/" + RDIR + f"costs_{config['costs']['year']}_elec.csv",
     output:
         "networks/" + RDIR + "elec_s{simpl}_{clusters}_ec_l{ll}_{opts}.nc",
