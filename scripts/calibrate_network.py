@@ -325,6 +325,9 @@ def attach_isolated_buses(n):
     if added and "attach" not in n.carriers.index:
         n.add("Carrier", "attach", co2_emissions=0.0, nice_name="isolated-bus attachment")
     for col in n.links.columns:
+        # ramp limits stay NaN (= none): a ramp limit of 0 fixes the flow of the link at one value for the whole year
+        if col in ("ramp_limit_up", "ramp_limit_down"):
+            continue
         if n.links[col].dtype.kind == "f" and n.links[col].isna().any():
             n.links.loc[n.links.index.str.endswith(" attach"), col] = n.links.loc[
                 n.links.index.str.endswith(" attach"), col].fillna(0.0)
