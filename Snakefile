@@ -436,6 +436,25 @@ rule build_bus_regions:
         "scripts/build_bus_regions.py"
 
 
+rule build_region_population:
+    params:
+        build_shape_options=config["build_shape_options"],
+    input:
+        regions="resources/" + RDIR + "bus_regions/regions_onshore.geojson",
+        gadm_shapes="resources/" + RDIR + "shapes/gadm_shapes.geojson",
+    output:
+        "resources/" + RDIR + "bus_regions/population_onshore.csv",
+    log:
+        "logs/" + RDIR + "build_region_population.log",
+    benchmark:
+        "benchmarks/" + RDIR + "build_region_population"
+    threads: 1
+    resources:
+        mem_mb=3000,
+    script:
+        "scripts/build_region_population.py"
+
+
 def terminate_if_cutout_exists(w):
     """
     Check if any of the requested cutout files exist.
@@ -635,6 +654,11 @@ rule build_demand_profiles:
         time_shift=branch(
             enabled(config["load_options"].get("time_shift")),
             STATISTICS + "demand_shift.csv",
+            [],
+        ),
+        population=branch(
+            enabled(config["load_options"].get("population_within_units")),
+            "resources/" + RDIR + "bus_regions/population_onshore.csv",
             [],
         ),
         #gadm_shapes="resources/" + RDIR + "shapes/MAR2.geojson",

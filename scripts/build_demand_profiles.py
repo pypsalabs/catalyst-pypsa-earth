@@ -24,6 +24,7 @@ Inputs
 
 - ``networks/base.nc``: confer :ref:`base`, a base PyPSA Network
 - ``resources/bus_regions/regions_onshore.geojson``: confer :mod:`build_bus_regions`
+- ``resources/bus_regions/population_onshore.csv``: confer :mod:`build_region_population` (with ``load_options: population_within_units``)
 - ``load_data_paths``: paths to load profiles, e.g. hourly country load profiles produced by GEGIS
 - ``resources/shapes/gadm_shapes.geojson``: confer :ref:`shapes`, file containing the gadm shapes
 
@@ -374,6 +375,30 @@ def subnational_factors(transfer, units, shares, default):
     return normed(pd.Series(transfer.dot(per_unit)))
 
 
+def population_transfer(transfer, population, regions, units):
+    """
+    ``transfer`` (bus regions x units) with the population of the overlaps in place
+    of their area.
+
+    ``population`` is the table of :mod:`build_region_population` (``name``,
+    ``GADM_ID``, ``pop``). A column of the result holds the share of a unit's people
+    that live in each bus region. A unit without people in any bus region keeps its
+    column of area shares.
+    """
+    pop = population[
+        population["name"].isin(regions) & population["GADM_ID"].isin(units)
+    ]
+    rows = regions.get_indexer(pop["name"])
+    cols = units.get_indexer(pop["GADM_ID"])
+    people = sparse.coo_matrix((pop["pop"], (rows, cols)), shape=transfer.shape).tocsc()
+    total = np.asarray(people.sum(axis=0)).ravel()
+    inhabited = total > 0
+    share = people @ sparse.diags(
+        np.divide(1.0, total, out=np.zeros(len(total)), where=inhabited)
+    )
+    return (share + transfer @ sparse.diags((~inhabited).astype(float))).tocsr()
+
+
 def build_demand_profiles(
     n,
     load_source,
@@ -390,6 +415,7 @@ def build_demand_profiles(
     annual_totals=None,
     subnational_shares=None,
     time_shift=None,
+    population=None,
 ):
     """
     Create csv file of electric demand time series.
@@ -427,6 +453,10 @@ def build_demand_profiles(
         (``load_options.subnational_shares``; columns ``key``, ``country``,
         ``share``), see ``subnational_factors``. Countries without rows are
         distributed by GDP and population.
+    population: str, optional
+        csv with the population per bus region and GADM unit
+        (``load_options.population_within_units``), see ``population_transfer``.
+        Without it the load of a unit is distributed by the area of the overlaps.
 
     Returns
     -------
@@ -500,6 +530,7 @@ def build_demand_profiles(
     shares = pd.DataFrame(columns=["country", "share"])
     if subnational_shares:
         shares = pd.read_csv(subnational_shares, comment="#").set_index("key")
+    population = pd.read_csv(population, dtype={"name": str}) if population else None
 
     def upsample(cntry, group):
         """
@@ -511,6 +542,10 @@ def build_demand_profiles(
         else:
             shapes_cntry = shapes.loc[shapes.country == cntry]
             transfer = shapes_to_shapes(group, shapes_cntry.geometry).T.tocsr()
+            if population is not None:
+                transfer = population_transfer(
+                    transfer, population, group.index, shapes_cntry.index
+                )
             pop_n = pd.Series(
                 transfer.dot(shapes_cntry["pop"].fillna(1.0).values), index=group.index
             )
@@ -621,4 +656,5 @@ if __name__ == "__main__":
         annual_totals=snakemake.input.get("annual_totals"),
         subnational_shares=snakemake.input.get("subnational_shares"),
         time_shift=snakemake.input.get("time_shift"),
+        population=snakemake.input.get("population"),
     )
