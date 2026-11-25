@@ -475,7 +475,10 @@ FUELTYPE_TO_COSTS = {
 
 
 def fill_decommissioning_years_from_costs(
-    ppl: pd.DataFrame, costs: pd.DataFrame, default_lifetime: float = 30.0
+    ppl: pd.DataFrame,
+    costs: pd.DataFrame,
+    default_lifetime: float = 30.0,
+    lifetime_years: dict = None,
 ) -> pd.DataFrame:
     """
     Fill missing decommissioning years with the commissioning year plus the lifetime
@@ -484,7 +487,10 @@ def fill_decommissioning_years_from_costs(
 
     ``electricity: powerplants_lifetimes: costs``. The fuel types map to cost-table
     technologies through ``FUELTYPE_TO_COSTS``; other fuel types take
-    ``default_lifetime``. Hydro plants get no decommissioning year (infinite), so
+    ``default_lifetime``. ``lifetime_years`` (``electricity:
+    powerplants_lifetime_years``) replaces the lifetime of the fuel types it names,
+    e.g. ``{"Natural Gas": 40}``: the cost table's lifetime is the financing life of
+    a new plant, existing plants may run longer. Hydro plants get no decommissioning year (infinite), so
     they are neither dropped by ``powerplants_filter`` nor retired in myopic runs.
     Missing commissioning years are filled first (powerplantmatching: mean of the
     plants of the same country and fuel type).
@@ -495,6 +501,8 @@ def fill_decommissioning_years_from_costs(
     lifetime = (
         ppl.Fueltype.map(FUELTYPE_TO_COSTS).map(costs["lifetime"]).fillna(default_lifetime)
     )
+    if lifetime_years:
+        lifetime = ppl.Fueltype.map(lifetime_years).astype(float).fillna(lifetime)
     filled = pd.to_numeric(ppl.DateIn, errors="coerce") + lifetime
     filled = filled.where(ppl.Fueltype != "Hydro", np.inf)
     n_missing = ppl.DateOut.isna().sum()
@@ -630,6 +638,7 @@ if __name__ == "__main__":
                 ppl,
                 pd.read_csv(snakemake.input.tech_costs, index_col=0),
                 snakemake.params.fill_values["lifetime"],
+                snakemake.params.get("powerplants_lifetime_years"),
             )
         else:
             ppl = ppl.powerplant.fill_missing_decommissioning_years()
