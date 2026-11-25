@@ -767,6 +767,7 @@ rule build_powerplants:
         powerplants_lifetime_years=config["electricity"].get(
             "powerplants_lifetime_years", {}
         ),
+        powerplants_update=config["electricity"].get("powerplants_update", True),
         powerplants_within_shapes=config["electricity"].get(
             "powerplants_within_shapes", False
         ),

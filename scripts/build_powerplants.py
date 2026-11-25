@@ -628,9 +628,11 @@ if __name__ == "__main__":
     if custom_method == "replace":
         ppl = pd.DataFrame()
     else:
+        # powerplants_update: false reads the list powerplantmatching stored on an
+        # earlier call with the same configuration (countries, filter), if there is one
         ppl = pm.powerplants(
             from_url=False,
-            update=True,
+            update=snakemake.params.get("powerplants_update", True),
             config_update=config,
         )
         if snakemake.params.get("powerplants_lifetimes") == "costs":
